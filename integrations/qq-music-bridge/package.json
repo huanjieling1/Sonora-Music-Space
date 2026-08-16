@@ -1,0 +1,14 @@
+{
+  "name": "sonora-qq-music-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Loopback-only QQ Music bridge derived from Rain120/qq-music-api",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

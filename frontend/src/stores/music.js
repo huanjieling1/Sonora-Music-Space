@@ -1,0 +1,140 @@
+import { defineStore } from 'pinia'
+
+/** Ephemeral command bus from trusted Agent actions to the music workspace. */
+export const useMusicStore = defineStore('music', {
+  state: () => ({
+    pendingActions: [],
+    ...restorePlayerState(),
+    playRequestId: 0,
+    playbackCurrentTime: 0,
+    playbackDuration: 0,
+    playbackPaused: true,
+    playbackQuality: '',
+    seekRequestId: 0,
+    seekTargetSeconds: 0,
+  }),
+  actions: {
+    publish(actions) {
+      const incoming = Array.isArray(actions) ? actions.filter(action => action?.id && action?.type) : []
+      const knownIds = new Set(this.pendingActions.map(action => action.id))
+      incoming.forEach(action => {
+        if (!knownIds.has(action.id)) {
+          this.pendingActions.push(action)
+          knownIds.add(action.id)
+        }
+      })
+    },
+    takeNext() {
+      return this.pendingActions.shift() || null
+    },
+    playTrack(track, sourceQueue = null) {
+      if (!track?.id) return
+      if (Array.isArray(sourceQueue) && sourceQueue.length) {
+        this.queue = uniqueTracks(sourceQueue)
+      } else if (!this.queue.some(item => trackKey(item) === trackKey(track))) {
+        this.queue.push(track)
+      }
+      this.currentTrack = this.queue.find(item => trackKey(item) === trackKey(track)) || track
+      this.playRequestId += 1
+      this.resetPlaybackTelemetry()
+      persistPlayerState(this)
+    },
+    addToQueue(track) {
+      if (!track?.id || this.queue.some(item => trackKey(item) === trackKey(track))) return
+      this.queue.push(track)
+      persistPlayerState(this)
+    },
+    playNext() {
+      if (!this.queue.length) return
+      const index = this.queue.findIndex(item => trackKey(item) === trackKey(this.currentTrack))
+      this.currentTrack = this.queue[index < 0 || index >= this.queue.length - 1 ? 0 : index + 1]
+      this.playRequestId += 1
+      this.resetPlaybackTelemetry()
+      persistPlayerState(this)
+    },
+    playPrevious() {
+      if (!this.queue.length) return
+      const index = this.queue.findIndex(item => trackKey(item) === trackKey(this.currentTrack))
+      this.currentTrack = this.queue[index <= 0 ? this.queue.length - 1 : index - 1]
+      this.playRequestId += 1
+      this.resetPlaybackTelemetry()
+      persistPlayerState(this)
+    },
+    removeFromQueue(track) {
+      const key = trackKey(track)
+      this.queue = this.queue.filter(item => trackKey(item) !== key)
+      if (trackKey(this.currentTrack) === key) {
+        this.currentTrack = null
+        this.playRequestId += 1
+        this.resetPlaybackTelemetry()
+      }
+      persistPlayerState(this)
+    },
+    clearQueue() {
+      this.queue = []
+      this.currentTrack = null
+      this.playRequestId += 1
+      this.resetPlaybackTelemetry()
+      persistPlayerState(this)
+    },
+    updatePlaybackTelemetry({ currentTime, duration, paused, quality } = {}) {
+      if (Number.isFinite(currentTime)) this.playbackCurrentTime = Math.max(0, currentTime)
+      if (Number.isFinite(duration)) this.playbackDuration = Math.max(0, duration)
+      if (typeof paused === 'boolean') this.playbackPaused = paused
+      if (typeof quality === 'string') this.playbackQuality = quality
+    },
+    resetPlaybackTelemetry() {
+      this.playbackCurrentTime = 0
+      this.playbackDuration = Math.max(0, Number(this.currentTrack?.durationMs || 0) / 1000)
+      this.playbackPaused = true
+      this.playbackQuality = ''
+    },
+    seekTo(seconds) {
+      const target = Number(seconds)
+      if (!Number.isFinite(target) || target < 0) return
+      this.seekTargetSeconds = target
+      this.seekRequestId += 1
+    },
+  },
+})
+
+const STORAGE_KEY = 'sonora.music.player.v1'
+
+function restorePlayerState() {
+  if (typeof window === 'undefined') return { queue: [], currentTrack: null }
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || '{}')
+    return {
+      queue: Array.isArray(saved.queue) ? uniqueTracks(saved.queue) : [],
+      currentTrack: saved.currentTrack?.id ? saved.currentTrack : null,
+    }
+  } catch {
+    return { queue: [], currentTrack: null }
+  }
+}
+
+function persistPlayerState(store) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      queue: store.queue,
+      currentTrack: store.currentTrack,
+    }))
+  } catch {
+    // Playback still works when session storage is unavailable.
+  }
+}
+
+function trackKey(track) {
+  return track?.provider && track?.id ? `${track.provider}:${track.id}` : track?.id || ''
+}
+
+function uniqueTracks(tracks) {
+  const seen = new Set()
+  return tracks.filter(track => {
+    const key = trackKey(track)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
