@@ -1,0 +1,114 @@
+spring:
+  application:
+    name: langchain4j-agent
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: Asia/Shanghai
+  flyway:
+    enabled: true
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+      mail.smtp.ssl.enable: ${SMTP_SSL:false}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+agent:
+  api-key: ${AGENT_API_KEY:}
+  base-url: ${AGENT_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+  model-name: ${AGENT_MODEL:glm-4-flash-250414}
+  temperature: ${AGENT_TEMPERATURE:0.0}
+  max-tokens: ${AGENT_MAX_TOKENS:4096}
+  memory-max-messages: ${AGENT_MEMORY_MAX_MESSAGES:20}
+  timeout-seconds: ${AGENT_TIMEOUT_SECONDS:60}
+  log-requests: ${AGENT_LOG_REQUESTS:false}
+  log-responses: ${AGENT_LOG_RESPONSES:false}
+music:
+  personalization:
+    enabled: ${MUSIC_PERSONALIZATION_ENABLED:true}
+    active-policy-version: ${MUSIC_RANK_POLICY_ACTIVE_VERSION:baseline-v1}
+    embedding:
+      enabled: ${AGENT_EMBEDDING_ENABLED:true}
+      api-key: ${AGENT_EMBEDDING_API_KEY:${AGENT_API_KEY:}}
+      base-url: ${AGENT_EMBEDDING_BASE_URL:${AGENT_BASE_URL:https://open.bigmodel.cn/api/paas/v4}}
+      model: ${AGENT_EMBEDDING_MODEL:embedding-3}
+      dimensions: ${AGENT_EMBEDDING_DIMENSIONS:512}
+      timeout-seconds: ${AGENT_EMBEDDING_TIMEOUT_SECONDS:8}
+      batch-size: ${AGENT_EMBEDDING_BATCH_SIZE:64}
+    neo4j:
+      enabled: ${NEO4J_ENABLED:true}
+      uri: ${NEO4J_URI:bolt://127.0.0.1:7687}
+      username: ${NEO4J_USERNAME:neo4j}
+      password: ${NEO4J_PASSWORD:}
+      database: ${NEO4J_DATABASE:neo4j}
+    ranking:
+      rrf-k: ${MUSIC_RRF_K:60}
+      coarse-cut-ratio: ${MUSIC_COARSE_CUT_RATIO:0.65}
+      exploration-ratio: ${MUSIC_EXPLORATION_RATIO:0.15}
+      mmr-lambda: ${MUSIC_MMR_LAMBDA:0.7}
+      max-tracks-per-artist: ${MUSIC_MAX_TRACKS_PER_ARTIST:2}
+      personalization-delta-limit: ${MUSIC_PERSONALIZATION_DELTA_LIMIT:0.08}
+  knowledge:
+    enabled: ${MUSIC_KNOWLEDGE_ENABLED:true}
+    timeout-seconds: ${MUSIC_KNOWLEDGE_TIMEOUT_SECONDS:2}
+    success-cache-days: ${MUSIC_KNOWLEDGE_SUCCESS_CACHE_DAYS:30}
+    failure-cache-days: ${MUSIC_KNOWLEDGE_FAILURE_CACHE_DAYS:1}
+    wikidata:
+      enabled: ${WIKIDATA_ENABLED:true}
+      base-url: ${WIKIDATA_BASE_URL:https://www.wikidata.org}
+    musicbrainz:
+      enabled: ${MUSICBRAINZ_ENABLED:true}
+      base-url: ${MUSICBRAINZ_BASE_URL:https://musicbrainz.org}
+      user-agent: ${MUSICBRAINZ_USER_AGENT:Sonora/1.0 (personal music assistant)}
+  catalog:
+    timeout-seconds: ${MUSIC_PROVIDER_TIMEOUT_SECONDS:5}
+    jamendo:
+      client-id: ${JAMENDO_CLIENT_ID:}
+      base-url: ${JAMENDO_BASE_URL:https://api.jamendo.com/v3.0}
+    audius:
+      api-key: ${AUDIUS_API_KEY:}
+      base-url: ${AUDIUS_BASE_URL:https://api.audius.co/v1}
+    youtube:
+      api-key: ${YOUTUBE_API_KEY:}
+      base-url: ${YOUTUBE_API_BASE_URL:https://www.googleapis.com/youtube/v3}
+    qq:
+      enabled: ${QQ_MUSIC_ENABLED:true}
+      base-url: ${QQ_MUSIC_BRIDGE_URL:http://127.0.0.1:3200}
+      session-directory: ${QQ_MUSIC_SESSION_DIRECTORY:runtime-data}
+      default-quality: ${QQ_MUSIC_DEFAULT_QUALITY:flac}
+app:
+  security.password-iterations: 120000
+  security.remember-me.key: ${REMEMBER_ME_KEY:sonora-local-remember-me-key-change-before-public-deployment}
+  security.remember-me.validity-days: ${REMEMBER_ME_VALIDITY_DAYS:30}
+  security.remember-me.secure: ${SESSION_COOKIE_SECURE:false}
+  mail.from: ${SMTP_FROM:}
+  cors.allowed-origins: ${FRONTEND_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+logging:
+  level:
+    org.springframework.security: INFO
+    dev.langchain4j: INFO
+
