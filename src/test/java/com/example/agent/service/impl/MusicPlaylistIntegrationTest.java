@@ -109,9 +109,35 @@ class MusicPlaylistIntegrationTest {
         var opened = playlists.open(userA, custom.id(), conversationA);
         long itemId = opened.tracks().get(0).playlistTrackId();
         assertThat(playlists.removeTrack(userA, custom.id(), itemId).trackCount()).isZero();
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM music_playlist_track
+                 WHERE id = ? AND deleted_at IS NOT NULL
+                """, Integer.class, itemId)).isEqualTo(1);
+
+        assertThat(playlists.addTrack(userA, custom.id(), sourceExposure, "qq:addable").trackCount())
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM music_playlist_track
+                 WHERE id = ? AND deleted_at IS NULL
+                """, Integer.class, itemId)).isEqualTo(1);
 
         assertThatThrownBy(() -> playlists.addTrack(userB, custom.id(), sourceExposure, "qq:addable"))
                 .isInstanceOf(AppException.class);
+    }
+
+    @Test
+    void deletingPlaylistKeepsAuditRowButHidesItFromUserQueries() {
+        var custom = playlists.create(userA, "待删除歌单", "保留审计");
+
+        playlists.delete(userA, custom.id());
+
+        assertThat(playlists.list(userA)).noneMatch(item -> item.id().equals(custom.id()));
+        assertThatThrownBy(() -> playlists.open(userA, custom.id(), conversationA))
+                .isInstanceOf(AppException.class).hasMessageContaining("不存在");
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM music_playlist
+                 WHERE id = ? AND deleted_at IS NOT NULL
+                """, Integer.class, custom.id().toString())).isEqualTo(1);
     }
 
     @Test

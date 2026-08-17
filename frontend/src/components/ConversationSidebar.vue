@@ -1,15 +1,16 @@
 <script setup>
 import { computed } from 'vue'
-import { LogOut, MessageSquare, Plus, Sparkles } from 'lucide-vue-next'
+import { LogOut, MessageSquare, Plus, Settings, Sparkles, Trash2 } from 'lucide-vue-next'
 
 const props = defineProps({
   conversations: { type: Array, required: true },
   activeId: { type: String, default: '' },
   user: { type: Object, default: null },
   creating: { type: Boolean, default: false },
+  deletingId: { type: String, default: '' },
   loggingOut: { type: Boolean, default: false },
 })
-const emit = defineEmits(['create', 'select', 'logout'])
+const emit = defineEmits(['create', 'select', 'delete', 'settings', 'logout'])
 
 const groups = computed(() => {
   const result = []
@@ -59,7 +60,7 @@ function select(event, id) {
   <aside class="sidebar">
     <RouterLink class="brand" to="/agent">
       <span class="brand-mark"><Sparkles :size="17" /></span>
-      <span class="brand-copy"><strong>Sonora</strong><small>Agent Studio</small></span>
+      <span class="brand-copy"><strong>Sonora</strong><small>Music Companion</small></span>
     </RouterLink>
     <button class="conversation-create" type="button" :disabled="creating" @click="emit('create')">
       <Plus :size="17" />
@@ -69,15 +70,27 @@ function select(event, id) {
       <p v-if="!groups.length" class="conversation-empty">暂无对话</p>
       <section v-for="group in groups" :key="group.key" class="conversation-group">
         <h2>{{ group.label }}</h2>
-        <a
+        <div
           v-for="conversation in group.items"
           :key="conversation.id"
-          class="conversation-item"
+          class="conversation-row"
           :class="{ active: conversation.id === activeId }"
-          :href="`/agent?conversation=${encodeURIComponent(conversation.id)}`"
-          :title="conversation.title"
-          @click="select($event, conversation.id)"
-        ><MessageSquare :size="16" /><span>{{ conversation.title }}</span></a>
+        >
+          <a
+            class="conversation-item"
+            :href="`/agent?conversation=${encodeURIComponent(conversation.id)}`"
+            :title="conversation.title"
+            @click="select($event, conversation.id)"
+          ><MessageSquare :size="16" /><span>{{ conversation.title }}</span></a>
+          <button
+            class="conversation-delete"
+            type="button"
+            :disabled="deletingId === conversation.id"
+            :title="`删除对话：${conversation.title}`"
+            :aria-label="`删除对话：${conversation.title}`"
+            @click.stop="emit('delete', conversation)"
+          ><Trash2 :size="14" /></button>
+        </div>
       </section>
     </nav>
     <div class="sidebar-footer">
@@ -86,6 +99,15 @@ function select(event, id) {
         <strong>{{ userName }}</strong>
         <span>{{ userEmail }}</span>
       </div>
+      <button
+        class="icon-command"
+        type="button"
+        title="设置"
+        aria-label="打开设置"
+        @click="emit('settings')"
+      >
+        <Settings :size="19" />
+      </button>
       <button
         class="icon-command"
         type="button"

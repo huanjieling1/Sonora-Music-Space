@@ -478,6 +478,21 @@ public class MusicPersonalizationRepository {
         return count != null && count > 0;
     }
 
+    public boolean isTrackSaved(long userId, UUID exposureId, String trackId) {
+        ExposureItem item = findOwnedExposureItem(userId, exposureId, trackId)
+                .orElseThrow(() -> new AppException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "歌曲不属于当前用户的推荐曝光"));
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                  FROM music_playlist_track t
+                  JOIN music_playlist p ON p.id = t.playlist_id
+                 WHERE p.user_id = ? AND p.deleted_at IS NULL AND t.deleted_at IS NULL
+                   AND p.playlist_type IN ('CUSTOM', 'RECOMMENDED')
+                   AND t.track_key = ?
+                """, Integer.class, userId, item.trackKey());
+        return count != null && count > 0;
+    }
+
     private void insertPreference(long userId, PreferenceRow row) {
         insertPreference(userId, row, MusicTextNormalizer.normalize(row.value()));
     }

@@ -1,23 +1,27 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronsDown, ListMusic, Maximize2, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-vue-next'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { request } from '../services/api'
+import { runMusicExperienceTransition } from '../services/musicExperienceTransition'
 import { createPlaybackSession, finishPlayback, observePlayback, startPlayback } from '../services/musicPlaybackTracker'
 import { useMusicStore } from '../stores/music'
 import MusicTrackActions from './MusicTrackActions.vue'
+import { returnState } from '../services/navigation'
 
 const props = defineProps({ immersive: { type: Boolean, default: false } })
 const music = useMusicStore()
 const router = useRouter()
+const route = useRoute()
 const POSITION_STORAGE_KEY = 'sonora.music.player.position.v1'
 const MODE_STORAGE_KEY = 'sonora.music.player.mode.v1'
+const VOLUME_STORAGE_KEY = 'sonora.music.player.volume.v1'
 const VIEWPORT_GAP = 8
 const paused = ref(true)
 const ready = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
-const volume = ref(0.72)
+const volume = ref(readStoredVolume())
 const quality = ref('')
 const errorMessage = ref('')
 const seeking = ref(false)
@@ -36,20 +40,22 @@ let youtube = null
 let youtubeSdkPromise = null
 let youtubeTimer = null
 let playback = null
-let lastVolume = 0.72
+let lastVolume = Number(volume.value) > 0 ? Number(volume.value) : 0.72
 let dragState = null
 let suppressTrackClick = false
 
 const current = computed(() => music.currentTrack)
 const volumePercent = computed(() => Math.round(Number(volume.value) * 100))
 const canSeek = computed(() => Boolean(current.value) && duration.value > 0)
-const dockStyle = computed(() => dockPosition.value ? {
-  ...(playerMode.value === 'BAR' ? {} : {
-  right: `${dockPosition.value.right}px`,
-  bottom: `${dockPosition.value.bottom}px`,
-  }),
-} : undefined)
+const dockStyle = computed(() => ({
+  viewTransitionName: props.immersive ? 'none' : 'sonora-player-experience',
+  ...(dockPosition.value && playerMode.value !== 'BAR' ? {
+    right: `${dockPosition.value.right}px`,
+    bottom: `${dockPosition.value.bottom}px`,
+  } : {}),
+}))
 const queueStyle = computed(() => {
+  if (props.immersive) return { right: '24px', bottom: '112px', top: 'auto', maxHeight: 'min(420px, calc(100vh - 135px))' }
   if (playerMode.value === 'BAR') return { right: '18px', bottom: '118px', top: 'auto', maxHeight: 'min(420px, calc(100vh - 145px))' }
   const right = dockPosition.value?.right ?? 18
   const bottom = dockPosition.value?.bottom ?? 18
@@ -313,6 +319,16 @@ function setVolume() {
   if (Number(volume.value) > 0) lastVolume = Number(volume.value)
   if (audio) audio.volume = Number(volume.value)
   youtube?.setVolume?.(volumePercent.value)
+  try {
+    window.localStorage.setItem(VOLUME_STORAGE_KEY, String(volume.value))
+  } catch {
+    // 音量调节仍然有效；本地存储不可用时只是不跨刷新保存。
+  }
+}
+
+function handleVolumeInput(event) {
+  volume.value = Math.min(1, Math.max(0, Number(event.target.value) || 0))
+  setVolume()
 }
 
 function toggleMute() {
@@ -357,16 +373,17 @@ function publishPlaybackState() {
   })
 }
 
-function openCurrentTrack() {
+async function openCurrentTrack() {
   if (!current.value?.id) return
-  router.push({
-    name: 'music-track',
-    params: { provider: current.value.provider || 'unknown', trackId: current.value.id },
-  })
+  await runMusicExperienceTransition(() => router.push({
+      name: 'music-track',
+      params: { provider: current.value.provider || 'unknown', trackId: current.value.id },
+      state: returnState(route),
+    }), 'enter')
 }
 
 function startDockDrag(event) {
-  if (playerMode.value === 'BAR' || event.button !== 0 || !playerDock.value) return
+  if (props.immersive || playerMode.value === 'BAR' || event.button !== 0 || !playerDock.value) return
   const rect = playerDock.value.getBoundingClientRect()
   dragState = {
     pointerId: event.pointerId,
@@ -505,6 +522,16 @@ function readPlayerMode() {
   }
 }
 
+function readStoredVolume() {
+  if (typeof window === 'undefined') return 0.72
+  try {
+    const saved = Number(window.localStorage.getItem(VOLUME_STORAGE_KEY))
+    return Number.isFinite(saved) && saved >= 0 && saved <= 1 ? saved : 0.72
+  } catch {
+    return 0.72
+  }
+}
+
 function readViewport() {
   if (typeof window === 'undefined') return { width: 0, height: 0 }
   return { width: window.innerWidth, height: window.innerHeight }
@@ -543,16 +570,26 @@ function qualityLabel(value) {
     <button class="dock-track" :aria-disabled="!current" :title="current ? '拖动播放器；点击打开歌词页' : '拖动播放器'" @pointerdown="startDockDrag" @click="handleTrackClick">
       <img v-if="current?.imageUrl" :src="current.imageUrl" :alt="`${current.name} 封面`" draggable="false" />
       <span v-else class="dock-placeholder"><Music2 :size="19" /></span>
-      <div><strong>{{ current?.name || '选择一首歌曲' }}</strong><small>{{ current?.artists?.join(' / ') || 'Sonora Music' }} <em v-if="quality">{{ qualityLabel(quality) }}</em></small></div>
+      <div class="dock-track-copy">
+        <strong>{{ current?.name || '选择一首歌曲' }}</strong>
+        <small><span>{{ current?.artists?.join(' / ') || 'Sonora Music' }}</span><em v-if="quality">{{ qualityLabel(quality) }}</em></small>
+      </div>
     </button>
     <div class="dock-actions">
-      <MusicTrackActions v-if="current" :track="current" compact />
-      <button :disabled="!current" title="上一首" @click="music.playPrevious()"><SkipBack :size="16" /></button>
-      <button class="dock-play" :disabled="!current" :title="paused ? '播放' : '暂停'" @click="toggle"><Play v-if="paused" :size="17" fill="currentColor" /><Pause v-else :size="17" fill="currentColor" /></button>
-      <button :disabled="!current" title="下一首" @click="music.playNext()"><SkipForward :size="16" /></button>
-      <span class="dock-action-divider"></span>
-      <button :disabled="!current" :title="volumePercent === 0 ? '恢复音量' : '静音'" @click="toggleMute"><VolumeX v-if="volumePercent === 0" :size="16" /><Volume2 v-else :size="16" /></button>
-      <button ref="queueToggle" :class="{ selected: queueOpen }" title="播放列表" :aria-label="`播放列表，${music.queue.length} 首`" :aria-expanded="queueOpen" @click="queueOpen = !queueOpen"><ListMusic :size="17" /><small v-if="music.queue.length">{{ music.queue.length }}</small></button>
+      <div class="dock-preferences"><MusicTrackActions v-if="current" :track="current" compact /></div>
+      <div class="dock-transport">
+        <button :disabled="!current" title="上一首" @click="music.playPrevious()"><SkipBack :size="16" /></button>
+        <button class="dock-play" :disabled="!current" :title="paused ? '播放' : '暂停'" @click="toggle"><Play v-if="paused" :size="17" fill="currentColor" /><Pause v-else :size="17" fill="currentColor" /></button>
+        <button :disabled="!current" title="下一首" @click="music.playNext()"><SkipForward :size="16" /></button>
+      </div>
+      <div class="dock-secondary">
+        <span class="dock-action-divider"></span>
+        <span class="dock-volume-control">
+          <button :disabled="!current" :title="volumePercent === 0 ? '恢复音量' : `静音，当前音量 ${volumePercent}%`" @click="toggleMute"><VolumeX v-if="volumePercent === 0" :size="16" /><Volume2 v-else :size="16" /></button>
+          <input class="dock-volume-slider" :value="volume" type="range" min="0" max="1" step="0.01" :aria-label="`音量 ${volumePercent}%`" :disabled="!current" @input="handleVolumeInput" />
+        </span>
+        <button ref="queueToggle" :class="{ selected: queueOpen }" title="播放列表" :aria-label="`播放列表，${music.queue.length} 首`" :aria-expanded="queueOpen" @click="queueOpen = !queueOpen"><ListMusic :size="17" /><small v-if="music.queue.length">{{ music.queue.length }}</small></button>
+      </div>
     </div>
     <div class="dock-progress">
       <time>{{ formatTime(currentTime) }}</time>
@@ -678,7 +715,8 @@ function qualityLabel(value) {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
 }
 
-.dock-track > div {
+.dock-track > div,
+.dock-track-copy {
   display: grid;
   min-width: 0;
   gap: 4px;
@@ -692,18 +730,31 @@ function qualityLabel(value) {
 }
 
 .dock-track strong {
+  display: block;
+  min-width: 0;
   font-size: 12px;
   font-weight: 760;
+  line-height: 1.25;
   letter-spacing: -0.01em;
 }
 
 .dock-track small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   max-height: 0;
   color: #7e8492;
   font-size: 9px;
   opacity: 0;
   transform: translateY(-3px);
   transition: max-height 0.2s ease, opacity 0.2s ease 0.08s, transform 0.2s ease 0.08s;
+}
+
+.dock-track small > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .player-dock:hover .dock-track small,
@@ -716,10 +767,61 @@ function qualityLabel(value) {
 }
 
 .dock-track em {
+  flex: 0 0 auto;
   margin-left: 5px;
   color: #77dfc3;
   font-size: 8px;
   font-style: normal;
+}
+
+.player-dock.card-mode:hover .dock-track,
+.player-dock.card-mode:focus-within .dock-track,
+.player-dock.card-mode.expanded .dock-track {
+  top: 12px;
+  left: 12px;
+  right: 330px;
+  height: 62px;
+  grid-template-columns: 62px minmax(0, 1fr);
+}
+
+.player-dock.card-mode:hover .dock-track img,
+.player-dock.card-mode:focus-within .dock-track img,
+.player-dock.card-mode.expanded .dock-track img,
+.player-dock.card-mode:hover .dock-placeholder,
+.player-dock.card-mode:focus-within .dock-placeholder,
+.player-dock.card-mode.expanded .dock-placeholder {
+  width: 62px;
+  height: 62px;
+  border-radius: 14px;
+}
+
+.player-dock.card-mode:hover .dock-track strong,
+.player-dock.card-mode:focus-within .dock-track strong,
+.player-dock.card-mode.expanded .dock-track strong {
+  font-size: 13px;
+}
+
+.player-dock.card-mode:hover,
+.player-dock.card-mode:focus-within,
+.player-dock.card-mode.expanded {
+  width: 600px;
+  height: 150px;
+}
+
+.player-dock.card-mode:hover .dock-actions,
+.player-dock.card-mode:focus-within .dock-actions,
+.player-dock.card-mode.expanded .dock-actions {
+  top: 22px;
+  right: 13px;
+  gap: 5px;
+}
+
+.player-dock.card-mode:hover .dock-progress,
+.player-dock.card-mode:focus-within .dock-progress,
+.player-dock.card-mode.expanded .dock-progress {
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
 }
 
 .dock-actions {
@@ -742,6 +844,45 @@ function qualityLabel(value) {
   opacity: 1;
   pointer-events: auto;
   transform: none;
+}
+
+.dock-preferences,
+.dock-transport,
+.dock-secondary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.player-dock.bar-mode .dock-actions {
+  top: 12px;
+  right: 0;
+  left: 0;
+  height: 44px;
+  justify-content: initial;
+  gap: 0;
+  opacity: 1;
+  pointer-events: none;
+  transform: none;
+}
+
+.player-dock.bar-mode .dock-transport {
+  position: absolute;
+  left: 50%;
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
+.player-dock.bar-mode .dock-preferences {
+  position: absolute;
+  right: calc(50% + 92px);
+  pointer-events: auto;
+}
+
+.player-dock.bar-mode .dock-secondary {
+  position: absolute;
+  left: calc(50% + 92px);
+  pointer-events: auto;
 }
 
 .dock-actions button {
@@ -804,6 +945,37 @@ function qualityLabel(value) {
   height: 18px;
   margin: 0 2px;
   background: rgba(255, 255, 255, 0.09);
+}
+
+.dock-volume-control {
+  display: flex;
+  min-width: 30px;
+  align-items: center;
+  gap: 5px;
+}
+
+.dock-volume-control > button {
+  flex: 0 0 30px;
+}
+
+.dock-volume-slider {
+  width: 0;
+  min-width: 0;
+  height: 3px;
+  margin: 0;
+  accent-color: #b8ff54;
+  opacity: 0;
+  pointer-events: none;
+  transition: width 0.22s ease, opacity 0.16s ease;
+}
+
+.player-dock.card-mode:hover .dock-volume-slider,
+.player-dock.card-mode:focus-within .dock-volume-slider,
+.player-dock.card-mode.expanded .dock-volume-slider,
+.player-dock.bar-mode .dock-volume-slider {
+  width: 72px;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .dock-progress {
@@ -1017,24 +1189,66 @@ function qualityLabel(value) {
   bottom: 156px;
 }
 
-.player-dock.immersive {
-  right: 18px;
-  left: auto;
-  border-color: rgba(54, 78, 96, 0.17);
-  background: rgba(247, 252, 253, 0.9);
-  color: #25323a;
-  box-shadow: 0 20px 60px rgba(74, 112, 132, 0.2);
-}
-
+.player-dock.immersive,
+.player-dock.immersive.card-mode,
+.player-dock.immersive.bar-mode,
 .player-dock.immersive:hover,
 .player-dock.immersive:focus-within,
 .player-dock.immersive.expanded {
-  border-color: rgba(79, 149, 255, 0.27);
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 112px !important;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(226, 246, 249, 0), rgba(221, 242, 246, 0.48));
+  color: #25323a;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transform: none;
 }
 
-.player-dock.immersive .dock-track small,
-.player-dock.immersive .dock-progress time {
-  color: #687b86;
+/* The lyrics experience already presents the current song prominently, so the
+   global player becomes a page-native control rail instead of a second card. */
+.player-dock.immersive .dock-window-actions,
+.player-dock.immersive .dock-restore-card,
+.player-dock.immersive .dock-track {
+  display: none;
+}
+
+.player-dock.immersive .dock-actions {
+  top: 2px;
+  right: 0;
+  left: 0;
+  height: 54px;
+  justify-content: initial;
+  gap: 0;
+  opacity: 1;
+  pointer-events: none;
+  transform: none;
+}
+
+.player-dock.immersive .dock-transport {
+  position: absolute;
+  left: 50%;
+  gap: 12px;
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
+.player-dock.immersive .dock-preferences {
+  position: absolute;
+  right: calc(50% + 112px);
+  pointer-events: auto;
+}
+
+.player-dock.immersive .dock-secondary {
+  position: absolute;
+  left: calc(50% + 112px);
+  pointer-events: auto;
 }
 
 .player-dock.immersive .dock-actions button {
@@ -1048,12 +1262,107 @@ function qualityLabel(value) {
 }
 
 .player-dock.immersive .dock-actions .dock-play {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
   background: #4f95ff;
+  color: white;
+  box-shadow: 0 8px 24px rgba(79, 149, 255, 0.24);
+}
+
+.player-dock.immersive .dock-actions .dock-play:hover {
+  background: #438cff;
   color: white;
 }
 
-.player-dock.immersive .dock-progress input {
+.player-dock.immersive .dock-volume-slider {
+  display: block;
+  width: 72px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.player-dock.immersive .dock-action-divider {
+  background: rgba(47, 78, 91, 0.13);
+}
+
+.player-dock.immersive .dock-progress,
+.player-dock.immersive:hover .dock-progress,
+.player-dock.immersive:focus-within .dock-progress,
+.player-dock.immersive.expanded .dock-progress {
+  right: 24%;
+  bottom: 18px;
+  left: 24%;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+  gap: 10px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.player-dock.immersive .dock-progress time {
+  color: #687b86;
+  font-size: 10px;
+}
+
+.player-dock.immersive .dock-progress input,
+.player-dock.immersive .dock-volume-slider {
   accent-color: #4f95ff;
+}
+
+/*
+ * Immersive mode shares the same component with the floating card and bottom
+ * bar.  Keep its control rail in a dedicated, fixed grid so card/bar hover
+ * geometry can never move the buttons while the pointer crosses the player.
+ */
+.player-dock.immersive.card-mode .dock-actions,
+.player-dock.immersive.bar-mode .dock-actions {
+  top: 2px;
+  right: auto;
+  left: 50%;
+  display: grid;
+  width: min(640px, 72vw);
+  height: 54px;
+  grid-template-columns: minmax(72px, 1fr) 132px minmax(190px, 1fr);
+  align-items: center;
+  gap: 0;
+  opacity: 1;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.player-dock.immersive.card-mode .dock-preferences,
+.player-dock.immersive.bar-mode .dock-preferences,
+.player-dock.immersive.card-mode .dock-transport,
+.player-dock.immersive.bar-mode .dock-transport,
+.player-dock.immersive.card-mode .dock-secondary,
+.player-dock.immersive.bar-mode .dock-secondary {
+  position: static;
+  transform: none;
+}
+
+.player-dock.immersive.card-mode .dock-preferences,
+.player-dock.immersive.bar-mode .dock-preferences {
+  justify-self: end;
+  justify-content: flex-end;
+}
+
+.player-dock.immersive.card-mode .dock-transport,
+.player-dock.immersive.bar-mode .dock-transport {
+  width: 132px;
+  justify-self: center;
+  justify-content: center;
+}
+
+.player-dock.immersive.card-mode .dock-secondary,
+.player-dock.immersive.bar-mode .dock-secondary {
+  min-width: 190px;
+  justify-self: start;
+  justify-content: flex-start;
+}
+
+.player-dock.immersive .dock-actions .dock-play:hover {
+  transform: none;
 }
 
 @media (max-width: 900px) {
@@ -1072,6 +1381,13 @@ function qualityLabel(value) {
     width: min(414px, calc(100vw - 24px));
   }
 
+  .player-dock.card-mode:hover,
+  .player-dock.card-mode:focus-within,
+  .player-dock.card-mode.expanded {
+    width: min(600px, calc(100vw - 24px));
+    height: 150px;
+  }
+
   .dock-queue {
     right: 12px;
     bottom: 150px;
@@ -1084,6 +1400,74 @@ function qualityLabel(value) {
     bottom: 150px;
     width: 280px;
     height: 158px;
+  }
+
+  .player-dock.immersive .dock-progress,
+  .player-dock.immersive:hover .dock-progress,
+  .player-dock.immersive:focus-within .dock-progress,
+  .player-dock.immersive.expanded .dock-progress {
+    right: 14px;
+    left: 14px;
+  }
+
+  .player-dock.immersive .dock-preferences {
+    display: none;
+  }
+
+  .player-dock.immersive.card-mode .dock-actions,
+  .player-dock.immersive.bar-mode .dock-actions {
+    width: min(360px, calc(100vw - 24px));
+    grid-template-columns: 132px minmax(116px, 1fr);
+  }
+
+  .player-dock.immersive.card-mode .dock-transport,
+  .player-dock.immersive.bar-mode .dock-transport {
+    grid-column: 1;
+  }
+
+  .player-dock.immersive.card-mode .dock-secondary,
+  .player-dock.immersive.bar-mode .dock-secondary {
+    grid-column: 2;
+    min-width: 116px;
+  }
+
+  .player-dock.immersive .dock-volume-slider {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .player-dock.card-mode:hover .dock-track,
+  .player-dock.card-mode:focus-within .dock-track,
+  .player-dock.card-mode.expanded .dock-track {
+    right: 238px;
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .player-dock.card-mode:hover .dock-track img,
+  .player-dock.card-mode:focus-within .dock-track img,
+  .player-dock.card-mode.expanded .dock-track img,
+  .player-dock.card-mode:hover .dock-placeholder,
+  .player-dock.card-mode:focus-within .dock-placeholder,
+  .player-dock.card-mode.expanded .dock-placeholder {
+    width: 52px;
+    height: 52px;
+  }
+
+  .player-dock.card-mode .dock-volume-slider {
+    display: none;
+  }
+
+  .player-dock.bar-mode .dock-preferences {
+    display: none;
+  }
+
+  .player-dock.bar-mode .dock-secondary {
+    left: calc(50% + 68px);
+  }
+
+  .player-dock.bar-mode .dock-volume-slider {
+    display: none;
   }
 }
 

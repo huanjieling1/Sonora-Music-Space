@@ -9,6 +9,7 @@ import com.example.agent.model.bo.QqMusicSearchType;
 import com.example.agent.model.bo.QqArtistDetailBo;
 import com.example.agent.model.bo.QqAlbumDetailBo;
 import com.example.agent.model.bo.QqVideoPlaybackBo;
+import com.example.agent.model.bo.QqMusicQrLoginBo;
 
 import java.util.List;
 import java.util.UUID;
@@ -19,6 +20,12 @@ public interface QqMusicService {
     QqMusicStatusBo saveSession(String cookie);
 
     QqMusicStatusBo clearSession();
+
+    QqMusicQrLoginBo startQrLogin(long userId);
+
+    QqMusicQrLoginBo pollQrLogin(long userId, String loginId);
+
+    void cancelQrLogin(long userId, String loginId);
 
     QqMusicPlaybackBo resolvePlayback(String songMid, String mediaId);
 

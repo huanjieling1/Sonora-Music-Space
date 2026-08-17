@@ -76,6 +76,12 @@ public class AgentConversation {
         updatedAt = now;
     }
 
+    /** 将会话标记为已删除；消息记录保留用于审计，但不再参与列表、历史与记忆查询。 */
+    public void markDeleted(LocalDateTime now) {
+        deleted = true;
+        updatedAt = now;
+    }
+
     private static String titleFrom(String message) {
         String normalized = message == null ? "" : message.trim().replaceAll("\\s+", " ");
         if (normalized.isEmpty()) {

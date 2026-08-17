@@ -1,6 +1,7 @@
 package com.example.agent.service.impl;
 
 import com.example.agent.config.MusicCatalogProperties;
+import com.example.agent.exception.AppException;
 import com.example.agent.model.bo.QqMusicSearchType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -11,11 +12,79 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class QqMusicServiceImplTest {
+    @Test
+    void acceptsDedicatedBrowserLoginWithoutAInlineQrImage() throws Exception {
+        QqMusicSidecarClient sidecar = mock(QqMusicSidecarClient.class);
+        QqMusicSessionStore sessions = mock(QqMusicSessionStore.class);
+        when(sidecar.healthy()).thenReturn(true);
+        when(sidecar.startQrLogin()).thenReturn(new ObjectMapper().readTree("""
+                {"loginId":"0ed0b6ab-c8ef-4e35-b687-41a1e46267bf","loginMode":"BROWSER",
+                 "status":"WAITING_BROWSER","message":"已打开独立 Edge 登录窗口",
+                 "expiresAt":"2026-08-17T15:00:00.000Z"}
+                """));
+        var service = new QqMusicServiceImpl(properties(), sidecar, sessions);
+
+        var started = service.startQrLogin(7L);
+
+        assertThat(started.loginMode()).isEqualTo("BROWSER");
+        assertThat(started.qrImage()).isNull();
+        assertThat(started.status()).isEqualTo("WAITING_BROWSER");
+    }
+
+    @Test
+    void savesQrLoginSessionWithoutReturningCookieToTheBrowserModel() throws Exception {
+        QqMusicSidecarClient sidecar = mock(QqMusicSidecarClient.class);
+        QqMusicSessionStore sessions = mock(QqMusicSessionStore.class);
+        String loginId = "0ed0b6ab-c8ef-4e35-b687-41a1e46267bf";
+        when(sidecar.healthy()).thenReturn(true);
+        when(sidecar.startQrLogin()).thenReturn(new ObjectMapper().readTree("""
+                {"loginId":"0ed0b6ab-c8ef-4e35-b687-41a1e46267bf","status":"WAITING_SCAN",
+                 "message":"请扫码","qrImage":"data:image/png;base64,cXItYnl0ZXM=",
+                 "expiresAt":"2026-08-17T15:00:00.000Z"}
+                """));
+        when(sidecar.pollQrLogin(loginId)).thenReturn(new ObjectMapper().readTree("""
+                {"loginId":"0ed0b6ab-c8ef-4e35-b687-41a1e46267bf","status":"SUCCESS",
+                 "message":"登录成功","cookie":"uin=o12345678; qm_keyst=secret"}
+                """));
+        when(sessions.hasSession()).thenReturn(true);
+        when(sessions.maskedAccount()).thenReturn("******5678");
+        var service = new QqMusicServiceImpl(properties(), sidecar, sessions);
+
+        var started = service.startQrLogin(7L);
+        var completed = service.pollQrLogin(7L, loginId);
+
+        assertThat(started.qrImage()).startsWith("data:image/png;base64,");
+        assertThat(completed.status()).isEqualTo("SUCCESS");
+        assertThat(completed.qrImage()).isNull();
+        assertThat(completed.connection().sessionConfigured()).isTrue();
+        verify(sessions).save("uin=o12345678; qm_keyst=secret");
+    }
+
+    @Test
+    void rejectsQrLoginPollingFromAnotherApplicationUser() throws Exception {
+        QqMusicSidecarClient sidecar = mock(QqMusicSidecarClient.class);
+        QqMusicSessionStore sessions = mock(QqMusicSessionStore.class);
+        String loginId = "0ed0b6ab-c8ef-4e35-b687-41a1e46267bf";
+        when(sidecar.healthy()).thenReturn(true);
+        when(sidecar.startQrLogin()).thenReturn(new ObjectMapper().readTree("""
+                {"loginId":"0ed0b6ab-c8ef-4e35-b687-41a1e46267bf","status":"WAITING_SCAN",
+                 "message":"请扫码","qrImage":"data:image/png;base64,cXItYnl0ZXM="}
+                """));
+        var service = new QqMusicServiceImpl(properties(), sidecar, sessions);
+
+        service.startQrLogin(7L);
+
+        assertThatThrownBy(() -> service.pollQrLogin(8L, loginId))
+                .isInstanceOf(AppException.class)
+                .hasMessageContaining("不属于当前用户");
+    }
+
     @Test
     void mapsCategorizedQqSearchResultsAndPlayableTracks() throws Exception {
         QqMusicSidecarClient sidecar = mock(QqMusicSidecarClient.class);

@@ -52,6 +52,13 @@ public class ConversationStore {
         return messages.findAllByConversationIdOrderByIdAsc(conversation.getId());
     }
 
+    @Transactional
+    public void delete(Long userId, UUID conversationId) {
+        AgentConversation conversation = requireOwned(userId, conversationId);
+        conversation.markDeleted(LocalDateTime.now());
+        conversations.save(conversation);
+    }
+
     @Transactional(readOnly = true)
     public List<ChatMessage> loadMemory(ConversationMemoryId memoryId, int maxMessages) {
         AgentConversation conversation = requireOwned(memoryId.userId(), memoryId.conversationId());
@@ -66,12 +73,17 @@ public class ConversationStore {
     }
 
     @Transactional
-    public AgentConversation saveExchange(Long userId, UUID conversationId, String userMessage, String answer) {
+    public AgentConversation saveExchange(Long userId, UUID conversationId, String userMessage,
+                                          String answer, String actionsJson) {
         AgentConversation conversation = requireOwned(userId, conversationId);
         LocalDateTime now = LocalDateTime.now();
         messages.save(AgentChatMessage.user(conversation.getId(), userMessage, now));
-        messages.save(AgentChatMessage.assistant(conversation.getId(), answer, now));
+        messages.save(AgentChatMessage.assistant(conversation.getId(), answer, actionsJson, now));
         conversation.recordExchange(userMessage, now);
         return conversations.save(conversation);
+    }
+
+    public AgentConversation saveExchange(Long userId, UUID conversationId, String userMessage, String answer) {
+        return saveExchange(userId, conversationId, userMessage, answer, null);
     }
 }

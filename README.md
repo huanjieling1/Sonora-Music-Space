@@ -131,9 +131,10 @@ Neo4j 密码保存在当前 Windows 用户环境变量 `NEO4J_PASSWORD`，不会
 ### 个人 QQ 音乐接入
 
 `run-dev.ps1` 会在 `127.0.0.1:3200` 自动启动零第三方依赖的 QQ 音乐 Bridge。
-登录 Sonora 后展开音乐面板中的“QQ 音乐”，先在 `y.qq.com` 登录自己的账号，再把完整 Cookie
-粘贴到本机导入框。Cookie 经 AES-GCM 加密后保存在 `runtime-data/`，不会发送回浏览器、写入日志
-或提交到 Git。
+登录 Sonora 后打开左下角“设置 → QQ 音乐”，点击“打开 QQ 登录窗口”，然后在独立的 Microsoft Edge
+窗口中使用手机 QQ 扫码或完成账号登录。Sonora 会从 QQ 官方网页登录上下文中自动提取必要的 QQ 音乐
+会话字段，不需要抓包或手动复制 Cookie。登录凭据经
+AES-GCM 加密后保存在 `runtime-data/`，不会返回浏览器、写入日志或提交到 Git。
 
 - QQ 音乐优先参与歌曲、歌手、专辑和中文主流内容检索。
 - 播放地址仅在点击歌曲时获取，并按无损、320K、128K、M4A 自动降级。

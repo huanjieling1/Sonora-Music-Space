@@ -2,7 +2,6 @@ package com.example.agent;
 
 import com.example.agent.model.bo.ConversationMemoryId;
 import com.example.agent.service.AssistantAgent;
-import com.example.agent.tools.DevelopmentTools;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.service.AiServices;
@@ -47,7 +46,6 @@ class GlmModelSmokeTest {
                         .id(id)
                         .maxMessages(4)
                         .build())
-                .tools(new DevelopmentTools())
                 .build();
 
         String answer = assistant.chat(

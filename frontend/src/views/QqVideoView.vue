@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ExternalLink, LoaderCircle, Play, Video } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import { request } from '../services/api'
+import { navigateBack } from '../services/navigation'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,16 +31,14 @@ async function loadVideo() {
 }
 
 function goBack() {
-  const previous = window.history.state?.back
-  if (typeof previous === 'string' && previous.startsWith('/music')) router.back()
-  else router.push('/music')
+  navigateBack(router)
 }
 </script>
 
 <template>
   <main class="qq-video-page">
     <img v-if="cover" class="video-ambient" :src="cover" alt="" aria-hidden="true" />
-    <header><button title="返回搜索结果" @click="goBack"><ArrowLeft :size="20" /></button><div><Video :size="18" /><strong>Sonora</strong><span>QQ MUSIC VIDEO</span></div><a v-if="playback?.externalUrl" :href="playback.externalUrl" target="_blank" rel="noreferrer" title="在 QQ 音乐查看"><ExternalLink :size="18" /></a></header>
+    <header><button title="返回上一页" @click="goBack"><ArrowLeft :size="20" /></button><div><Video :size="18" /><strong>Sonora</strong><span>QQ MUSIC VIDEO</span></div><a v-if="playback?.externalUrl" :href="playback.externalUrl" target="_blank" rel="noreferrer" title="在 QQ 音乐查看"><ExternalLink :size="18" /></a></header>
     <section class="video-stage">
       <div v-if="loading" class="video-state"><LoaderCircle class="spin" :size="32" /><strong>正在准备高清播放地址</strong></div>
       <div v-else-if="errorMessage" class="video-state"><Video :size="42" /><strong>视频暂时无法播放</strong><p>{{ errorMessage }}</p><button @click="loadVideo">重新加载</button></div>

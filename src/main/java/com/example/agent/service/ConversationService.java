@@ -15,5 +15,7 @@ public interface ConversationService {
 
     List<ChatMessageBo> history(Long userId, UUID conversationId);
 
+    void delete(Long userId, UUID conversationId);
+
     ChatResultBo chat(ChatAo request);
 }

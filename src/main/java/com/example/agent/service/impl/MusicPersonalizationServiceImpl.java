@@ -54,6 +54,11 @@ public class MusicPersonalizationServiceImpl implements MusicPersonalizationServ
     }
 
     @Override
+    public boolean isTrackSaved(long userId, UUID searchId, String trackId) {
+        return repository.isTrackSaved(userId, searchId, trackId);
+    }
+
+    @Override
     public MusicProfileVo profile(long userId) {
         List<MusicPreferenceVo> all = repository.profile(userId).stream().map(this::toVo).toList();
         var stats = repository.profileStats(userId);

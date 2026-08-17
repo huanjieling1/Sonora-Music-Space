@@ -38,8 +38,9 @@ final class MusicTextNormalizer {
                 .replaceFirst("^我\\s*", "")
                 .replaceFirst("^(?:想要|想|希望|需要)\\s*", "")
                 .replaceFirst("^(?:找到|找找|找|搜索|搜搜|搜|推荐|播放|听听|听)\\s*", "")
-                .replaceFirst("^(?:一下|一些|一首|一曲)\\s*", "")
-                .replaceFirst("(?:的)?(?:相关)?(?:歌曲|音乐|歌|曲目)$", "")
+                .replaceFirst("^(?:一下|一些|一首|一曲|一个)\\s*", "")
+                .replaceFirst("^(?:跟|和|与|关于)\\s*", "")
+                .replaceFirst("(?:相关)?(?:的)?(?:歌曲|音乐|歌|曲目|歌单)(?:给我)?$", "")
                 .replaceFirst("的$", "")
                 .strip();
         if (result.length() < 2) {

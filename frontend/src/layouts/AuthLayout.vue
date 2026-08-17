@@ -1,5 +1,5 @@
 <script setup>
-import { Bot, Music2, Sparkles } from 'lucide-vue-next'
+import { Headphones, Music2, Sparkles } from 'lucide-vue-next'
 
 defineProps({
   heading: { type: Array, required: true },
@@ -13,15 +13,15 @@ defineProps({
     <section class="auth-aside">
       <RouterLink class="brand brand-inverse" to="/">
         <span class="brand-mark"><Sparkles :size="17" /></span>
-        <span class="brand-copy"><strong>Sonora</strong><small>Agent Studio</small></span>
+        <span class="brand-copy"><strong>Sonora</strong><small>Music Companion</small></span>
       </RouterLink>
       <div class="auth-aside-copy">
-        <span class="auth-eyebrow">AI WORKSPACE · MUSIC FLOW</span>
+        <span class="auth-eyebrow">PERSONALIZED MUSIC · ALWAYS ON</span>
         <h1><span v-for="line in heading" :key="line">{{ line }}</span></h1>
         <p>{{ description }}</p>
         <div class="auth-features" aria-label="功能概览">
-          <span><Bot :size="15" /> 智能 Agent 工作流</span>
-          <span><Music2 :size="15" /> 与音乐保持专注</span>
+          <span><Headphones :size="15" /> 个性化音乐推荐</span>
+          <span><Music2 :size="15" /> 跨曲库搜索与播放</span>
         </div>
       </div>
       <small>{{ footnote }}</small>

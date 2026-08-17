@@ -39,32 +39,44 @@ public class AgentChatMessage {
     @Column(nullable = false, columnDefinition = "MEDIUMTEXT")
     private String content;
 
+    /** 助手消息关联的结构化音乐展示动作 JSON。 */
+    @Column(name = "actions_json", columnDefinition = "MEDIUMTEXT")
+    private String actionsJson;
+
     /** 消息创建日期。 */
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Builder(access = AccessLevel.PRIVATE)
-    private AgentChatMessage(String conversationId, ChatMessageRole role, String content, LocalDateTime createdAt) {
+    private AgentChatMessage(String conversationId, ChatMessageRole role, String content,
+                             String actionsJson, LocalDateTime createdAt) {
         this.conversationId = conversationId;
         this.role = role;
         this.content = content;
+        this.actionsJson = actionsJson;
         this.createdAt = createdAt;
     }
 
     public static AgentChatMessage user(String conversationId, String content, LocalDateTime createdAt) {
-        return create(conversationId, ChatMessageRole.USER, content, createdAt);
+        return create(conversationId, ChatMessageRole.USER, content, null, createdAt);
     }
 
     public static AgentChatMessage assistant(String conversationId, String content, LocalDateTime createdAt) {
-        return create(conversationId, ChatMessageRole.ASSISTANT, content, createdAt);
+        return assistant(conversationId, content, null, createdAt);
+    }
+
+    public static AgentChatMessage assistant(String conversationId, String content,
+                                             String actionsJson, LocalDateTime createdAt) {
+        return create(conversationId, ChatMessageRole.ASSISTANT, content, actionsJson, createdAt);
     }
 
     private static AgentChatMessage create(String conversationId, ChatMessageRole role,
-                                           String content, LocalDateTime createdAt) {
+                                           String content, String actionsJson, LocalDateTime createdAt) {
         return AgentChatMessage.builder()
                 .conversationId(conversationId)
                 .role(role)
                 .content(content)
+                .actionsJson(actionsJson)
                 .createdAt(createdAt)
                 .build();
     }

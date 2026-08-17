@@ -43,12 +43,14 @@ public class MusicPlaylistRepository {
                        COALESCE(p.cover_url, (
                            SELECT JSON_UNQUOTE(JSON_EXTRACT(t.track_snapshot, '$.imageUrl'))
                              FROM music_playlist_track t
-                            WHERE t.playlist_id = p.id ORDER BY t.position LIMIT 1
+                            WHERE t.playlist_id = p.id AND t.deleted_at IS NULL
+                            ORDER BY t.position LIMIT 1
                        )) AS display_cover,
-                       (SELECT COUNT(*) FROM music_playlist_track t WHERE t.playlist_id = p.id) AS track_count,
+                       (SELECT COUNT(*) FROM music_playlist_track t
+                         WHERE t.playlist_id = p.id AND t.deleted_at IS NULL) AS track_count,
                        p.editable, p.updated_at
                   FROM music_playlist p
-                 WHERE p.user_id = ?
+                 WHERE p.user_id = ? AND p.deleted_at IS NULL
                  ORDER BY FIELD(p.playlist_type, 'FAVORITES', 'RECENT', 'RECOMMENDED', 'CUSTOM'),
                           p.updated_at DESC
                 """, this::mapPlaylist, userId);
@@ -116,8 +118,11 @@ public class MusicPlaylistRepository {
     @Transactional
     public void delete(long userId, UUID playlistId) {
         requireEditable(userId, playlistId);
-        jdbc.update("DELETE FROM music_playlist WHERE id = ? AND user_id = ?",
-                playlistId.toString(), userId);
+        jdbc.update("""
+                UPDATE music_playlist
+                   SET deleted_at = CURRENT_TIMESTAMP(6), updated_at = CURRENT_TIMESTAMP(6)
+                 WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                """, playlistId.toString(), userId);
     }
 
     @Transactional
@@ -126,13 +131,17 @@ public class MusicPlaylistRepository {
         requireEditable(userId, playlistId);
         Integer next = jdbc.queryForObject("""
                 SELECT COALESCE(MAX(position), 0) + 1
-                  FROM music_playlist_track WHERE playlist_id = ?
+                  FROM music_playlist_track
+                 WHERE playlist_id = ? AND deleted_at IS NULL
                 """, Integer.class, playlistId.toString());
         jdbc.update("""
                 INSERT INTO music_playlist_track
                     (playlist_id, track_key, position, track_snapshot)
                 VALUES (?, ?, ?, CAST(? AS JSON))
-                ON DUPLICATE KEY UPDATE track_snapshot = VALUES(track_snapshot)
+                ON DUPLICATE KEY UPDATE
+                    position = VALUES(position),
+                    track_snapshot = VALUES(track_snapshot),
+                    deleted_at = NULL
                 """, playlistId.toString(), item.trackKey(), next == null ? 1 : next,
                 json(item.track()));
         jdbc.update("""
@@ -147,7 +156,9 @@ public class MusicPlaylistRepository {
     public MusicPlaylistBo removeTrack(long userId, UUID playlistId, long playlistTrackId) {
         requireEditable(userId, playlistId);
         int deleted = jdbc.update("""
-                DELETE FROM music_playlist_track WHERE id = ? AND playlist_id = ?
+                UPDATE music_playlist_track
+                   SET deleted_at = CURRENT_TIMESTAMP(6)
+                 WHERE id = ? AND playlist_id = ? AND deleted_at IS NULL
                 """, playlistTrackId, playlistId.toString());
         if (deleted == 0) throw new AppException(HttpStatus.NOT_FOUND, "歌单中没有这首歌曲");
         resequence(playlistId);
@@ -163,11 +174,14 @@ public class MusicPlaylistRepository {
                        COALESCE(p.cover_url, (
                            SELECT JSON_UNQUOTE(JSON_EXTRACT(t.track_snapshot, '$.imageUrl'))
                              FROM music_playlist_track t
-                            WHERE t.playlist_id = p.id ORDER BY t.position LIMIT 1
+                            WHERE t.playlist_id = p.id AND t.deleted_at IS NULL
+                            ORDER BY t.position LIMIT 1
                        )) AS display_cover,
-                       (SELECT COUNT(*) FROM music_playlist_track t WHERE t.playlist_id = p.id) AS track_count,
+                       (SELECT COUNT(*) FROM music_playlist_track t
+                         WHERE t.playlist_id = p.id AND t.deleted_at IS NULL) AS track_count,
                        p.editable, p.updated_at
-                  FROM music_playlist p WHERE p.id = ? AND p.user_id = ?
+                  FROM music_playlist p
+                 WHERE p.id = ? AND p.user_id = ? AND p.deleted_at IS NULL
                 """, this::mapPlaylist, playlistId.toString(), userId).stream().findFirst().orElse(null);
         if (playlist == null) throw new AppException(HttpStatus.NOT_FOUND, "歌单不存在或不属于当前用户");
         return playlist;
@@ -180,7 +194,9 @@ public class MusicPlaylistRepository {
         if (playlist.type() == MusicPlaylistType.RECENT) syncRecent(userId);
         return jdbc.query("""
                 SELECT id, position, track_snapshot
-                  FROM music_playlist_track WHERE playlist_id = ? ORDER BY position
+                  FROM music_playlist_track
+                 WHERE playlist_id = ? AND deleted_at IS NULL
+                 ORDER BY position
                 """, (rs, row) -> new MusicPlaylistTrackBo(rs.getLong("id"), rs.getInt("position"),
                 readTrack(rs.getString("track_snapshot"))), playlistId.toString());
     }
@@ -244,13 +260,18 @@ public class MusicPlaylistRepository {
 
     private UUID systemPlaylistId(long userId, String key) {
         String id = jdbc.queryForObject("""
-                SELECT id FROM music_playlist WHERE user_id = ? AND system_key = ?
+                SELECT id FROM music_playlist
+                 WHERE user_id = ? AND system_key = ? AND deleted_at IS NULL
                 """, String.class, userId, key);
         return UUID.fromString(id);
     }
 
     private void replaceSystemTracks(UUID playlistId, List<StoredTrack> tracks) {
-        jdbc.update("DELETE FROM music_playlist_track WHERE playlist_id = ?", playlistId.toString());
+        jdbc.update("""
+                UPDATE music_playlist_track
+                   SET deleted_at = CURRENT_TIMESTAMP(6)
+                 WHERE playlist_id = ? AND deleted_at IS NULL
+                """, playlistId.toString());
         insertTracks(playlistId, tracks);
         String cover = tracks.isEmpty() ? null : readTrack(tracks.get(0).snapshot()).imageUrl();
         jdbc.update("""
@@ -265,13 +286,19 @@ public class MusicPlaylistRepository {
                     INSERT INTO music_playlist_track
                         (playlist_id, track_key, position, track_snapshot)
                     VALUES (?, ?, ?, CAST(? AS JSON))
+                    ON DUPLICATE KEY UPDATE
+                        position = VALUES(position),
+                        track_snapshot = VALUES(track_snapshot),
+                        deleted_at = NULL
                     """, playlistId.toString(), track.trackKey(), ++position, track.snapshot());
         }
     }
 
     private void resequence(UUID playlistId) {
         List<Long> ids = jdbc.queryForList("""
-                SELECT id FROM music_playlist_track WHERE playlist_id = ? ORDER BY position, id
+                SELECT id FROM music_playlist_track
+                 WHERE playlist_id = ? AND deleted_at IS NULL
+                 ORDER BY position, id
                 """, Long.class, playlistId.toString());
         int position = 0;
         for (Long id : ids) {

@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { cancelQrLogin, pollQrLogin, startQrLogin } from './qq-browser-login.js'
 
 const host = '127.0.0.1'
 const port = Number.parseInt(process.env.QQ_MUSIC_BRIDGE_PORT || '3200', 10)
@@ -545,6 +546,24 @@ const server = http.createServer(async (request, response) => {
     let result
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
       result = { status: 200, body: { ready: true, name: 'sonora-qq-music-bridge' } }
+    } else if (request.method === 'POST' && requestUrl.pathname === '/auth/qr/start') {
+      result = { status: 200, body: await startQrLogin() }
+    } else if (request.method === 'GET' && requestUrl.pathname === '/auth/qr/status') {
+      const loginId = requestUrl.searchParams.get('id')?.trim() || ''
+      if (loginId) {
+        const qrResult = await pollQrLogin(loginId)
+        if (qrResult.status === 'FAILED') {
+          console.error(`[qq-bridge] ${qrResult.errorCode || 'QQ_LOGIN_COMPLETION_FAILED'} stage=${qrResult.stage || 'completion'}`)
+        }
+        result = { status: 200, body: qrResult }
+      } else {
+        result = { status: 400, body: { code: 'INVALID_LOGIN_ID', message: '缺少二维码登录标识' } }
+      }
+    } else if (request.method === 'DELETE' && requestUrl.pathname === '/auth/qr') {
+      const loginId = requestUrl.searchParams.get('id')?.trim() || ''
+      result = loginId
+        ? { status: 200, body: await cancelQrLogin(loginId) }
+        : { status: 400, body: { code: 'INVALID_LOGIN_ID', message: '缺少二维码登录标识' } }
     } else if (request.method === 'GET' && requestUrl.pathname === '/search') {
       result = await search(requestUrl)
     } else if (request.method === 'GET' && requestUrl.pathname === '/home/playlists') {
@@ -569,9 +588,12 @@ const server = http.createServer(async (request, response) => {
   } catch (error) {
     const timeout = error?.name === 'TimeoutError'
     status = timeout ? 504 : 502
+    const errorCode = error?.publicCode || (timeout ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_FAILED')
+    const message = error?.publicMessage || (timeout ? 'QQ 音乐请求超时' : 'QQ 音乐接口暂时不可用')
+    console.error(`[qq-bridge] ${errorCode} stage=${error?.stage || 'request'} cause=${error?.message || 'unknown'}`)
     json(response, status, {
-      code: timeout ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_FAILED',
-      message: timeout ? 'QQ 音乐请求超时' : 'QQ 音乐接口暂时不可用',
+      code: errorCode,
+      message,
     })
   } finally {
     console.log(`${new Date().toISOString()} ${request.method} ${new URL(request.url || '/', `http://${host}`).pathname} ${status} ${Date.now() - startedAt}ms`)

@@ -10,12 +10,13 @@
 
 1. **YesPlayMusic**：整体最均衡，留白和信息层级最好。
 2. **Cassette**：移动端播放页最克制，封面、元数据和控制层级非常稳定。
-3. **SPlayer**：播放页最有氛围，适合中文音乐与歌词体验。
-4. **Retro Music Player**：移动端触控与动态色最成熟。
-5. **Swing Music**：极简表达最鲜明，适合提炼视觉语言。
-6. **Feishin**：桌面媒体库能力最完整，适合重度用户。
-7. **WaveFlow**：桌面浏览与沉浸播放切换清晰，适合参考播放场景分层。
-8. **Spotube**：跨端结构清晰，但视觉品牌感略弱于前三名。
+3. **Navic**：移动端资料库与播放页最统一，音质和队列信息克制而清楚。
+4. **SPlayer**：播放页最有氛围，适合中文音乐与歌词体验。
+5. **Retro Music Player**：移动端触控与动态色最成熟。
+6. **Swing Music**：极简表达最鲜明，适合提炼视觉语言。
+7. **Feishin**：桌面媒体库能力最完整，适合重度用户。
+8. **WaveFlow**：桌面浏览与沉浸播放切换清晰，适合参考播放场景分层。
+9. **Spotube**：跨端结构清晰，但视觉品牌感略弱于前三名。
 
 不建议照抄任何一套完整界面。最佳组合是：YesPlayMusic 的内容页骨架 + SPlayer 的沉浸播放页 + Cassette/Retro 的移动端控制规则 + Feishin 的媒体库效率。
 
@@ -39,6 +40,7 @@
 |---|---|---:|---:|---:|---:|---|---|
 | [YesPlayMusic](https://github.com/qier222/YesPlayMusic) | 桌面 / Web | 9.5 | 9.3 | 9.0 | 9.3 | 留白、轻量导航、歌词双栏 | 当前稳定版进入维护，2.0 为 Alpha |
 | [Cassette](https://github.com/CassetteLab/cassette) | iOS / macOS | 9.1 | 9.4 | 8.8 | 9.1 | 大封面、低噪声控制区、移动播放层级 | Apple 平台取向明显，桌面布局参考有限 |
+| [Navic](https://github.com/ssalggnikool/Navic) | Android / iOS | 9.1 | 9.1 | 9.0 | 9.1 | 封面取色、音质胶囊、底部播放上下文 | 主要面向 Subsonic，桌面参考有限 |
 | [SPlayer](https://github.com/SPlayer-Dev/SPlayer) | 跨平台 | 9.3 | 8.5 | 8.7 | 8.9 | 专辑取色、沉浸歌词、中文排版 | 原项目维护模式，新功能转向 SPlayer-Next |
 | [Retro Music Player](https://github.com/RetroMusicPlayer/RetroMusicPlayer) | Android | 8.8 | 8.8 | 9.1 | 8.9 | Material You、动态色、大触控区 | 首页模块较多时容易拥挤 |
 | [Feishin](https://github.com/jeffvli/feishin) | 桌面 / Web | 8.9 | 7.7 | 9.1 | 8.6 | 媒体库效率、信息密度、稳定壳层 | 功能密度高，不是纯极简路线 |
@@ -169,6 +171,32 @@ WaveFlow 的首页使用明亮、低对比的媒体库壳层，底部播放器�
 
 不要照抄：首页同时出现状态卡、情绪卡和多组推荐卡时会削弱极简感；Sonora 只适合借鉴场景分层，不应增加同类模块。
 
+### 9. Navic：用一套颜色语法连接资料库和播放页
+
+![Navic 播放页](https://raw.githubusercontent.com/NavicApp/Branding/main/screenshots/player.png)
+
+Navic 的播放页从封面提取背景色，但没有额外叠加复杂纹理；曲名、歌手、波形进度、音质和主控制沿单一纵轴排列。资料库仍然使用同一色系，并把迷你播放器固定在底部导航之上，因此从浏览到播放的上下文切换非常自然。
+
+可复用规律：
+
+- 音质使用单行小胶囊呈现，放在进度与主控制之间，不与曲名争夺层级。
+- 当前歌曲迷你播放器紧贴全局导航上方，避免成为游离的悬浮卡片。
+- 首页快捷入口限制为 2×2，最近播放、艺人和专辑继续依靠封面网格表达。
+- 收藏与更多操作靠近歌曲元数据；随机、循环等状态控制与主播放键分组。
+
+不要照抄：封面颜色直接铺满背景时必须检查浅色封面和低对比封面；Web 端还需要保留独立的文字对比度兜底色。
+
+## 与 Sonora 当前实现的对应关系
+
+2026-08-17 复核时，原单体音乐侧栏已拆成四个清晰职责：
+
+- `MusicLibraryView.vue`：固定资料库导航、搜索、推荐入口和内容网格。
+- `MusicTrackView.vue`：封面氛围、唱片视觉和歌词双栏组成沉浸播放页。
+- `MusicPlayerDock.vue`：跨页面保留当前曲目、进度、音量、音质和队列。
+- `InlineMusicResults.vue`：让 Agent 对话中的歌曲结果保持轻量，并提供进入完整音乐空间的出口。
+
+这比继续扩张右侧音乐面板更符合本研究的结论：Agent 负责发起音乐任务，完整浏览交给资料库页面，播放状态由全局播放器连续承载。现有实现已经吸收 YesPlayMusic/Feishin 的稳定壳层、SPlayer/WaveFlow 的浏览与沉浸分层，以及 Navic 的音质与播放上下文表达；下一步应以可用性验证为主，不再增加新的常驻模块。
+
 ## 一套可直接落地的简约音乐设计规范
 
 ### 信息架构
@@ -251,6 +279,7 @@ WaveFlow 的首页使用明亮、低对比的媒体库壳层，底部播放器�
 - [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer)：功能与社区关注度较高，后续应补做多页面截图核验。
 - [SPlayer-Next](https://github.com/SPlayer-Dev/SPlayer-Next)：2026-08-14 仍有提交，但 README 尚未提供可核验的完整界面截图，暂不能替换原 SPlayer 的视觉结论。
 - [Phoebe](https://github.com/j-roskopf/Phoebe)：2026-08-15 仍有提交，桌面、Android 和 Web 截图来自 CI 基线，界面完成度与交互清晰度合格；但三栏、常驻队列和可视化控制的信息密度偏高，暂不进入“简约”核心榜单。
+- [Koda](https://github.com/Ivorisnoob/Koda)：2026-08-16 仍有提交且官方截图覆盖音乐、视频与八套播放器；Editorial 风格的排版和不规则封面裁切很有辨识度，但多套播放器会增加学习成本并削弱跨页面一致性，暂不进入核心榜单。
 
 ## 来源与可追溯性
 
