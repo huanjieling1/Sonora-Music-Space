@@ -38,12 +38,12 @@ async function submit() {
 
 <template>
   <AuthLayout
-    :heading="['建立属于你的', '创作空间。']"
-    description="保存每一次对话、灵感与播放节奏，让 Agent 工作流从这里持续生长。"
+    :heading="['建立属于你的', '音乐空间。']"
+    description="保存歌单、播放记录和音乐偏好，让推荐随着每一次聆听更懂你。"
     footnote="图形验证码 2 分钟有效且只能使用一次"
   >
-    <h2>创建你的空间</h2>
-    <p>只需一分钟，即可开始使用。</p>
+    <h2>创建音乐账号</h2>
+    <p>只需一分钟，即可开始发现音乐。</p>
     <form class="form-grid" @submit.prevent="submit">
       <div class="form-row">
         <div class="field">

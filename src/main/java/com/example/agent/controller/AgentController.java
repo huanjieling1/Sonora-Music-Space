@@ -10,6 +10,7 @@ import com.example.agent.security.AppUserPrincipal;
 import com.example.agent.service.ConversationService;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -51,6 +53,14 @@ public class AgentController {
                 .map(MessageVo::from)
                 .toList();
         return ApiResponse.ok("获取成功", result);
+    }
+
+    @DeleteMapping("/conversations/{conversationId}")
+    public ApiResponse<Map<String, Boolean>> deleteConversation(
+            @PathVariable UUID conversationId,
+            @AuthenticationPrincipal AppUserPrincipal user) {
+        conversationService.delete(user.id(), conversationId);
+        return ApiResponse.ok("对话已删除", Map.of("deleted", true));
     }
 
     @PostMapping("/chat")

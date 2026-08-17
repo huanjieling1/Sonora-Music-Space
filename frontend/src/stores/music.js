@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 
-/** Ephemeral command bus from trusted Agent actions to the music workspace. */
+/** Global music player state and trusted Agent action handler. */
 export const useMusicStore = defineStore('music', {
   state: () => ({
-    pendingActions: [],
+    handledActionIds: [],
     ...restorePlayerState(),
     playRequestId: 0,
     playbackCurrentTime: 0,
@@ -12,20 +12,24 @@ export const useMusicStore = defineStore('music', {
     playbackQuality: '',
     seekRequestId: 0,
     seekTargetSeconds: 0,
+    trackStates: {},
+    playlistRevision: 0,
+    lastPlaylistMutation: null,
   }),
   actions: {
-    publish(actions) {
-      const incoming = Array.isArray(actions) ? actions.filter(action => action?.id && action?.type) : []
-      const knownIds = new Set(this.pendingActions.map(action => action.id))
-      incoming.forEach(action => {
-        if (!knownIds.has(action.id)) {
-          this.pendingActions.push(action)
-          knownIds.add(action.id)
+    applyAgentActions(actions) {
+      const handled = new Set(this.handledActionIds)
+      const incoming = Array.isArray(actions) ? actions : []
+      for (const action of incoming) {
+        if (!action?.id || !action?.type || handled.has(action.id)) continue
+        if (action.type === 'QUEUE_MUSIC_RESULTS') {
+          for (const track of action.tracks || []) this.addToQueue(track)
+        } else if (action.type === 'PLAY_TRACK' && action.track?.id) {
+          this.playTrack(action.track)
         }
-      })
-    },
-    takeNext() {
-      return this.pendingActions.shift() || null
+        handled.add(action.id)
+      }
+      this.handledActionIds = [...handled].slice(-200)
     },
     playTrack(track, sourceQueue = null) {
       if (!track?.id) return
@@ -94,6 +98,27 @@ export const useMusicStore = defineStore('music', {
       if (!Number.isFinite(target) || target < 0) return
       this.seekTargetSeconds = target
       this.seekRequestId += 1
+    },
+    setTrackState(track, patch = {}) {
+      const key = trackKey(track)
+      if (!key) return
+      this.trackStates = {
+        ...this.trackStates,
+        [key]: { ...(this.trackStates[key] || {}), ...patch },
+      }
+    },
+    recordPlaylistTrackAdded(track, playlist) {
+      const key = trackKey(track)
+      if (!key || !playlist?.id) return
+      this.setTrackState(track, { saved: true })
+      this.lastPlaylistMutation = {
+        type: 'TRACK_ADDED',
+        trackKey: key,
+        playlistId: playlist.id,
+        playlist,
+        occurredAt: Date.now(),
+      }
+      this.playlistRevision += 1
     },
   },
 })

@@ -74,7 +74,7 @@ public class EmailVerificationServiceImpl implements EmailVerificationService {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(from);
         message.setTo(email);
-        message.setSubject("LangChain4j Agent 注册验证码");
+        message.setSubject("Sonora 音乐空间注册验证码");
         message.setText("您的注册验证码是：" + plainCode + "\n\n验证码 5 分钟内有效，请勿转发或告知他人。\n如非本人操作，请忽略此邮件。");
         try {
             mailSenderProvider.getObject().send(message);

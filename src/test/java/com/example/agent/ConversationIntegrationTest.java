@@ -89,6 +89,25 @@ class ConversationIntegrationTest {
         assertThat(memory.get(1)).isInstanceOf(AiMessage.class);
     }
 
+    @Test
+    void softDeletesOnlyOwnedConversationAndHidesItsHistory() {
+        var firstConversation = store.create(firstUser.getId());
+        store.saveExchange(firstUser.getId(), firstConversation.getConversationId(), "播放雨爱", "正在播放");
+
+        assertThatThrownBy(() -> store.delete(secondUser.getId(), firstConversation.getConversationId()))
+                .isInstanceOfSatisfying(AppException.class,
+                        exception -> assertThat(exception.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        store.delete(firstUser.getId(), firstConversation.getConversationId());
+
+        assertThat(store.list(firstUser.getId())).isEmpty();
+        assertThatThrownBy(() -> store.history(firstUser.getId(), firstConversation.getConversationId()))
+                .isInstanceOfSatisfying(AppException.class,
+                        exception -> assertThat(exception.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(messages.findAllByConversationIdOrderByIdAsc(firstConversation.getId())).hasSize(2);
+        assertThat(conversations.findById(firstConversation.getId()).orElseThrow().isDeleted()).isTrue();
+    }
+
     private void cleanDatabase() {
         messages.deleteAll();
         conversations.deleteAll();

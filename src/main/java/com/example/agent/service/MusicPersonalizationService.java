@@ -14,6 +14,8 @@ public interface MusicPersonalizationService {
 
     boolean isTrackLiked(long userId, UUID searchId, String trackId);
 
+    boolean isTrackSaved(long userId, UUID searchId, String trackId);
+
     MusicProfileVo profile(long userId);
 
     MusicPreferenceVo addPreference(long userId, MusicPreferenceRequest request);

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, ChevronRight, Clock3, Disc3, Heart, Home, Library, ListMusic, LogOut,
@@ -7,7 +7,9 @@ import {
 } from 'lucide-vue-next'
 import { ApiError, request } from '../services/api'
 import { confirmAction } from '../services/confirm'
-import { readQqHomePage, writeQqHomePage } from '../services/musicDiscoveryCache'
+import { nextQqHomePage, readQqHomePage, writeQqHomePage } from '../services/musicDiscoveryCache'
+import { getMusicGreeting } from '../services/musicGreeting'
+import { navigateBack, returnState } from '../services/navigation'
 import { shuffleTracks } from '../services/musicShuffle'
 import { useAuthStore } from '../stores/auth'
 import { useMusicStore } from '../stores/music'
@@ -46,6 +48,8 @@ const artistOpening = ref(false)
 const artistTab = ref('SONGS')
 const albumDetail = ref(null)
 const albumOpening = ref(false)
+const currentMoment = ref(new Date())
+let greetingClock = null
 
 const activePlaylistId = computed(() => typeof route.params.playlistId === 'string' ? route.params.playlistId : '')
 const activeQqPlaylistId = computed(() => typeof route.params.qqPlaylistId === 'string' ? route.params.qqPlaylistId : '')
@@ -69,10 +73,7 @@ const visiblePersonalPlaylists = computed(() => {
     .filter(item => !query || `${item.name} ${item.description || ''}`.toLocaleLowerCase('zh-CN').includes(query))
     .sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0))
 })
-const greeting = computed(() => {
-  const hour = new Date().getHours()
-  return hour < 11 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
-})
+const greetingState = computed(() => getMusicGreeting(currentMoment.value))
 const searchTracks = computed(() => withSearchExposure(searchResult.value?.tracks || []))
 const activeSearchTracks = computed(() => searchTracks.value)
 const artistTracks = computed(() => (artistDetail.value?.tracks || []).map(track => ({
@@ -98,16 +99,32 @@ const sidebarPlaylistFilters = [
 ]
 
 const mixes = [
-  { key: 'focus', eyebrow: 'FOCUS FLOW', name: '深度专注', description: '适合长时间编码与阅读，克制、低干扰、有稳定节拍', color: 'lime' },
+  { key: 'focus', eyebrow: 'FOCUS FLOW', name: '深度专注', description: '适合长时间阅读与学习，克制、低干扰、有稳定节拍', color: 'lime' },
   { key: 'night', eyebrow: 'NIGHT RADIO', name: '霓虹夜行', description: '深夜城市、合成器、朦胧氛围与一点未来感', color: 'violet' },
   { key: 'reset', eyebrow: 'SOFT RESET', name: '柔软重启', description: '温柔、松弛、清亮的人声和轻盈器乐', color: 'peach' },
   { key: 'discover', eyebrow: 'DISCOVERY', name: '偏好之外', description: '保留熟悉感，同时探索一些没有听过的新艺人与风格', color: 'blue' },
 ]
 
-onMounted(initialize)
+onMounted(() => {
+  void initialize()
+  greetingClock = window.setInterval(() => { currentMoment.value = new Date() }, 60_000)
+})
+onBeforeUnmount(() => window.clearInterval(greetingClock))
 watch(() => [activePlaylistId.value, activeQqPlaylistId.value], async () => { await loadActivePlaylist() })
 watch(activeQqArtistMid, async () => { await loadArtistDetail() })
 watch(activeQqAlbumMid, async () => { await loadAlbumDetail() })
+watch(() => music.playlistRevision, async () => {
+  const mutation = music.lastPlaylistMutation
+  if (!mutation?.playlistId) return
+  const index = playlists.value.findIndex(item => item.id === mutation.playlistId)
+  if (mutation.playlist) {
+    if (index >= 0) playlists.value.splice(index, 1, mutation.playlist)
+    else playlists.value.unshift(mutation.playlist)
+  } else {
+    await refreshPlaylists()
+  }
+  if (activePlaylistId.value === mutation.playlistId) await loadActivePlaylist()
+})
 
 async function initialize() {
   loading.value = true
@@ -115,6 +132,7 @@ async function initialize() {
     await ensureConversation()
     await Promise.all([refreshPlaylists(), loadQqHome(readQqHomePage(window.localStorage, auth.user?.id))])
     await Promise.all([loadActivePlaylist(), loadArtistDetail(), loadAlbumDetail()])
+    await restoreSearchFromRoute()
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       await router.replace('/login')
@@ -124,6 +142,15 @@ async function initialize() {
   } finally {
     loading.value = false
   }
+}
+
+async function restoreSearchFromRoute() {
+  if (!isHome.value || typeof route.query.search !== 'string' || !route.query.search.trim()) return
+  const requestedType = String(route.query.type || 'TRACK').toUpperCase()
+  searchType.value = searchTabs.some(tab => tab.type === requestedType) ? requestedType : 'TRACK'
+  searchKeyword.value = route.query.search.trim()
+  const requestedPage = Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1)
+  await performSearch(requestedPage, searchKeyword.value, { syncRoute: false })
 }
 
 async function loadArtistDetail(options = {}) {
@@ -201,7 +228,7 @@ async function loadQqHome(page = 1) {
 
 async function loadNextQqHome() {
   if (qqHomeLoading.value) return
-  await loadQqHome(qqHomePage.value + 1)
+  await loadQqHome(nextQqHomePage(qqHomePage.value))
 }
 
 async function loadActivePlaylist() {
@@ -288,7 +315,7 @@ async function playRandomMix(mix) {
   }
 }
 
-async function performSearch(page = 1, overrideKeyword = '') {
+async function performSearch(page = 1, overrideKeyword = '', options = {}) {
   const keyword = (overrideKeyword || searchKeyword.value).trim()
   if (!keyword || searching.value) return
   searching.value = true
@@ -305,7 +332,16 @@ async function performSearch(page = 1, overrideKeyword = '') {
     })
     const result = await request(`/api/music/qq/search?${params}`)
     searchResult.value = result.data
-    if (!isHome.value) await router.push('/music')
+    const searchLocation = {
+      path: '/music',
+      query: { search: keyword, type: searchType.value, page: String(page) },
+    }
+    if (!isHome.value) await router.push(searchLocation)
+    else if (options.syncRoute !== false && (
+      route.query.search !== keyword
+      || route.query.type !== searchType.value
+      || String(route.query.page || '') !== String(page)
+    )) await router.replace(searchLocation)
   } catch (error) {
     errorMessage.value = error.message
   } finally {
@@ -319,33 +355,33 @@ async function changeSearchType(type) {
   await performSearch(1)
 }
 
-function clearSearch() {
+async function clearSearch() {
   searchResult.value = null
   selectedOnlinePlaylist.value = null
   searchType.value = 'TRACK'
+  if (route.query.search) await router.replace('/music')
 }
 
-function handleTopbarBack() {
-  if (isSearchView.value) clearSearch()
-  else if (isArtistView.value || isAlbumView.value) router.back()
-  else router.push('/music')
+async function handleTopbarBack() {
+  if (isSearchView.value) await clearSearch()
+  else navigateBack(router)
 }
 
 function openSearchArtist(artist) {
   const mid = String(artist?.mid || artist?.id || '').trim()
   if (!/^[A-Za-z0-9]+$/.test(mid)) return
-  router.push({ name: 'music-qq-artist', params: { artistMid: mid } })
+  router.push({ name: 'music-qq-artist', params: { artistMid: mid }, state: returnState(route) })
 }
 
 function openSearchAlbum(album) {
   const mid = String(album?.mid || album?.id || '').trim()
-  if (mid) router.push({ name: 'music-qq-album', params: { albumMid: mid } })
+  if (mid) router.push({ name: 'music-qq-album', params: { albumMid: mid }, state: returnState(route) })
 }
 
 function openSearchVideo(video) {
   const id = String(video?.id || '').trim()
   if (!id) return
-  router.push({ name: 'music-qq-video', params: { videoId: id }, query: { title: video.name || '', cover: video.coverUrl || '', artists: video.artists?.join(' / ') || '', durationMs: String(video.durationMs || 0), publishDate: video.publishDate || '' } })
+  router.push({ name: 'music-qq-video', params: { videoId: id }, query: { title: video.name || '', cover: video.coverUrl || '', artists: video.artists?.join(' / ') || '', durationMs: String(video.durationMs || 0), publishDate: video.publishDate || '' }, state: returnState(route) })
 }
 
 function playAlbumTrack(index) {
@@ -356,7 +392,7 @@ function openAlbumTrack(index) {
   const track = albumTracks.value[index]
   if (!track) return
   music.playTrack(track, albumTracks.value)
-  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id } })
+  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id }, state: returnState(route) })
 }
 
 function openSearchPlaylist(playlist) {
@@ -377,14 +413,14 @@ function openSearchTrack(index) {
   const track = tracks[index]
   if (!track) return
   music.playTrack(track, tracks)
-  router.push({ name: 'music-track', params: { provider: track.provider || 'unknown', trackId: track.id } })
+  router.push({ name: 'music-track', params: { provider: track.provider || 'unknown', trackId: track.id }, state: returnState(route) })
 }
 
 function openLyricResult(item) {
   const track = { ...item.track, _searchId: searchResult.value?.searchId }
   if (!track.id) return
   music.playTrack(track, [track])
-  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id } })
+  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id }, state: returnState(route) })
 }
 
 async function createPlaylist() {
@@ -470,6 +506,7 @@ function openTrack(index) {
   router.push({
     name: 'music-track',
     params: { provider: track.provider || 'unknown', trackId: track.id },
+    state: returnState(route),
   })
 }
 
@@ -489,7 +526,7 @@ function openArtistTrack(index) {
   const track = artistTracks.value[index]
   if (!track) return
   music.playTrack(track, artistTracks.value)
-  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id } })
+  router.push({ name: 'music-track', params: { provider: track.provider || 'qq', trackId: track.id }, state: returnState(route) })
 }
 
 function playArtistTopTracks() {
@@ -729,8 +766,8 @@ function formatCompactCount(value) {
         </section>
       </template>
       <template v-else-if="isHome">
-        <section class="music-hero">
-          <div><span>GOOD MUSIC, RIGHT NOW</span><h1>{{ greeting }}，{{ auth.user?.username }}</h1><p>你的每一次播放、收藏和跳过，都会让下一张歌单更懂此刻。</p></div>
+        <section class="music-hero" :class="[`is-${greetingState.theme}`, { 'is-holiday': greetingState.isHoliday }]">
+          <div class="hero-copy"><div class="hero-kicker"><span>{{ greetingState.eyebrow }}</span><small>{{ greetingState.status }}</small></div><h1>{{ greetingState.salutation }}，{{ auth.user?.username || '音乐用户' }}</h1><p>{{ greetingState.message }}</p></div>
           <button class="hero-play" :disabled="!personalPlaylists.length" @click="personalPlaylists[0] && openPlaylist(personalPlaylists[0].id)"><Play :size="22" fill="currentColor" />播放最近生成</button>
         </section>
 
@@ -1479,4 +1516,27 @@ function formatCompactCount(value) {
   .qq-lyric-list button { grid-template-columns: minmax(0,1fr) 60px; }
   .qq-lyric-list time { display: none; }
 }
+
+.music-hero {
+  --hero-glow: rgba(184,255,84,.19);
+  --hero-start: #211a37;
+  --hero-middle: #171825;
+  --hero-end: #162522;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 78% 28%,var(--hero-glow),transparent 27%),linear-gradient(130deg,var(--hero-start),var(--hero-middle) 57%,var(--hero-end));
+  transition: background .45s ease,border-color .45s ease;
+}
+.music-hero.is-morning { --hero-glow: rgba(255,213,79,.27); --hero-start: #29203c; --hero-middle: #263126; --hero-end: #18362c; }
+.music-hero.is-noon { --hero-glow: rgba(255,160,86,.24); --hero-start: #38252e; --hero-middle: #28242d; --hero-end: #2d2922; }
+.music-hero.is-afternoon { --hero-glow: rgba(132,167,255,.22); --hero-start: #211d3b; --hero-middle: #192335; --hero-end: #172b2b; }
+.music-hero.is-evening { --hero-glow: rgba(255,111,127,.19); --hero-start: #2c1c35; --hero-middle: #1c1a2e; --hero-end: #17262a; }
+.music-hero.is-night { --hero-glow: rgba(91,126,255,.2); --hero-start: #171a35; --hero-middle: #141622; --hero-end: #111d2c; }
+.music-hero.is-holiday { border-color: rgba(255,215,126,.2); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.music-hero > div,.music-hero > .hero-play { position: relative; z-index: 1; }
+.hero-copy { max-width: 760px; }
+.hero-kicker { display: flex; align-items: center; gap: 10px; }
+.music-hero .hero-kicker small { border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 5px 8px; background: rgba(255,255,255,.055); color: #d7d1e8; font-size: 8px; font-weight: 760; letter-spacing: .06em; }
+.music-hero.is-holiday .hero-kicker small { border-color: rgba(255,215,126,.24); background: rgba(255,201,91,.09); color: #ffe1a2; }
+.music-hero .hero-copy p { max-width: 690px; line-height: 1.65; }
 </style>

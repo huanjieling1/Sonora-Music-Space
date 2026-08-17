@@ -138,6 +138,22 @@ public class QqMusicSidecarClient {
                 .retrieve().body(JsonNode.class);
     }
 
+    public JsonNode startQrLogin() {
+        return restClient.post().uri("/auth/qr/start").retrieve().body(JsonNode.class);
+    }
+
+    public JsonNode pollQrLogin(String loginId) {
+        return restClient.get()
+                .uri(uri -> uri.path("/auth/qr/status").queryParam("id", loginId).build())
+                .retrieve().body(JsonNode.class);
+    }
+
+    public void cancelQrLogin(String loginId) {
+        restClient.delete()
+                .uri(uri -> uri.path("/auth/qr").queryParam("id", loginId).build())
+                .retrieve().toBodilessEntity();
+    }
+
     private static String trimTrailingSlash(String value) {
         return value != null && value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }

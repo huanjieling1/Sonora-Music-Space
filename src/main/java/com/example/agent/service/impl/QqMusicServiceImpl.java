@@ -15,6 +15,7 @@ import com.example.agent.model.bo.QqMusicSearchType;
 import com.example.agent.model.bo.QqArtistDetailBo;
 import com.example.agent.model.bo.QqAlbumDetailBo;
 import com.example.agent.model.bo.QqVideoPlaybackBo;
+import com.example.agent.model.bo.QqMusicQrLoginBo;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,8 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 @Service
 public class QqMusicServiceImpl implements QqMusicService {
@@ -44,6 +47,8 @@ public class QqMusicServiceImpl implements QqMusicService {
     private final QqMusicSidecarClient sidecar;
     private final QqMusicSessionStore sessionStore;
     private final MusicPersonalizationRepository personalization;
+    private final ConcurrentMap<String, Long> qrLoginOwners = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, String> activeQrLogins = new ConcurrentHashMap<>();
 
     @Autowired
     public QqMusicServiceImpl(MusicCatalogProperties properties,
@@ -73,7 +78,7 @@ public class QqMusicServiceImpl implements QqMusicService {
         } else if (!available) {
             message = "QQ 音乐本机 Bridge 未启动";
         } else if (!session) {
-            message = "请导入当前浏览器中的 QQ 音乐登录态";
+            message = "请使用手机 QQ 或 QQ 音乐扫码连接";
         } else {
             message = "QQ 音乐已接入；实际播放范围取决于当前账号权益";
         }
@@ -106,13 +111,115 @@ public class QqMusicServiceImpl implements QqMusicService {
     }
 
     @Override
+    public QqMusicQrLoginBo startQrLogin(long userId) {
+        requireBridge();
+        String previous = activeQrLogins.remove(userId);
+        if (previous != null && Long.valueOf(userId).equals(qrLoginOwners.remove(previous))) {
+            try {
+                sidecar.cancelQrLogin(previous);
+            } catch (RuntimeException ignored) {
+                // The previous attempt may already have expired in the local bridge.
+            }
+        }
+        try {
+            JsonNode response = sidecar.startQrLogin();
+            String loginId = response == null ? "" : response.path("loginId").asText("");
+            String qrImage = response == null ? "" : response.path("qrImage").asText("");
+            String loginMode = response == null ? "" : response.path("loginMode").asText("QR");
+            boolean validLoginView = "BROWSER".equals(loginMode)
+                    || qrImage.startsWith("data:image/png;base64,");
+            if (!loginId.matches("[0-9a-fA-F-]{36}") || !validLoginView) {
+                throw new AppException(HttpStatus.BAD_GATEWAY, "无法打开 QQ 音乐登录窗口");
+            }
+            qrLoginOwners.put(loginId, userId);
+            activeQrLogins.put(userId, loginId);
+            return qrLogin(response, null);
+        } catch (RestClientResponseException exception) {
+            throw new AppException(HttpStatus.BAD_GATEWAY, "无法打开 QQ 音乐登录窗口");
+        } catch (AppException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new AppException(HttpStatus.BAD_GATEWAY, "无法打开 QQ 音乐登录窗口");
+        }
+    }
+
+    @Override
+    public QqMusicQrLoginBo pollQrLogin(long userId, String loginId) {
+        requireOwnedQrLogin(userId, loginId);
+        try {
+            JsonNode response = sidecar.pollQrLogin(loginId);
+            if (response == null) throw new AppException(HttpStatus.BAD_GATEWAY, "QQ 音乐登录状态暂时不可用");
+            String state = response.path("status").asText("ERROR");
+            QqMusicStatusBo connection = null;
+            if ("SUCCESS".equals(state)) {
+                String cookie = response.path("cookie").asText("");
+                if (!StringUtils.hasText(cookie)) {
+                    throw new AppException(HttpStatus.BAD_GATEWAY, "QQ 音乐登录未返回有效会话");
+                }
+                sessionStore.save(cookie);
+                connection = status();
+                try {
+                    sidecar.cancelQrLogin(loginId);
+                } catch (RuntimeException ignored) {
+                    // The credential is already encrypted locally. Expiry cleanup remains as a fallback.
+                }
+                releaseQrLogin(userId, loginId);
+            } else if ("EXPIRED".equals(state) || "FAILED".equals(state)) {
+                releaseQrLogin(userId, loginId);
+            }
+            return qrLogin(response, connection);
+        } catch (RestClientResponseException exception) {
+            throw new AppException(HttpStatus.BAD_GATEWAY, "QQ 音乐登录状态暂时不可用");
+        } catch (IllegalArgumentException exception) {
+            throw new AppException(HttpStatus.BAD_GATEWAY, "QQ 音乐登录态无效，请重新登录");
+        } catch (AppException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new AppException(HttpStatus.BAD_GATEWAY, "QQ 音乐登录状态暂时不可用");
+        }
+    }
+
+    @Override
+    public void cancelQrLogin(long userId, String loginId) {
+        requireOwnedQrLogin(userId, loginId);
+        try {
+            sidecar.cancelQrLogin(loginId);
+        } catch (RuntimeException ignored) {
+            // Cancellation is idempotent; always forget the local ownership binding.
+        } finally {
+            releaseQrLogin(userId, loginId);
+        }
+    }
+
+    private QqMusicQrLoginBo qrLogin(JsonNode response, QqMusicStatusBo connection) {
+        return new QqMusicQrLoginBo(response.path("loginId").asText(null),
+                response.path("loginMode").asText("QR"),
+                response.path("status").asText("ERROR"), response.path("message").asText(""),
+                response.path("qrImage").asText(null), response.path("expiresAt").asText(null), connection);
+    }
+
+    private void requireOwnedQrLogin(long userId, String loginId) {
+        if (loginId == null || !loginId.matches("[0-9a-fA-F-]{36}")) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "二维码登录标识不正确");
+        }
+        if (!Long.valueOf(userId).equals(qrLoginOwners.get(loginId))) {
+            throw new AppException(HttpStatus.NOT_FOUND, "二维码登录已结束或不属于当前用户");
+        }
+    }
+
+    private void releaseQrLogin(long userId, String loginId) {
+        qrLoginOwners.remove(loginId, userId);
+        activeQrLogins.remove(userId, loginId);
+    }
+
+    @Override
     public QqMusicPlaybackBo resolvePlayback(String songMid, String mediaId) {
         if (songMid == null || !songMid.matches("[A-Za-z0-9]+")
                 || (StringUtils.hasText(mediaId) && !mediaId.matches("[A-Za-z0-9]+"))) {
             throw new AppException(HttpStatus.BAD_REQUEST, "QQ 音乐曲目标识不正确");
         }
         String cookie = sessionStore.cookie().orElseThrow(() ->
-                new AppException(HttpStatus.UNAUTHORIZED, "QQ 音乐登录态未配置，请先导入"));
+                new AppException(HttpStatus.UNAUTHORIZED, "QQ 音乐登录态未配置，请先扫码连接"));
         if (!sidecar.healthy()) {
             throw new AppException(HttpStatus.SERVICE_UNAVAILABLE, "QQ 音乐本机 Bridge 未启动");
         }
@@ -132,7 +239,7 @@ public class QqMusicServiceImpl implements QqMusicService {
             } catch (RestClientResponseException exception) {
                 lastFailure = exception;
                 if (exception.getStatusCode().value() == 401) {
-                    throw new AppException(HttpStatus.UNAUTHORIZED, "QQ 音乐登录态已失效，请重新导入");
+                    throw new AppException(HttpStatus.UNAUTHORIZED, "QQ 音乐登录态已失效，请重新扫码连接");
                 }
             } catch (RuntimeException exception) {
                 lastFailure = exception;

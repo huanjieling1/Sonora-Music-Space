@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import AuthLayout from '../layouts/AuthLayout.vue'
+import { storeBrowserPassword } from '../services/browserCredentials'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
@@ -43,6 +44,7 @@ async function submit() {
     const normalizedAccount = account.value.trim()
     await auth.login(normalizedAccount, password.value, rememberMe.value)
     storeRememberedAccount(normalizedAccount)
+    if (rememberMe.value) await storeBrowserPassword(normalizedAccount, password.value)
     const target = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
       ? route.query.redirect
       : '/agent'
@@ -57,16 +59,23 @@ async function submit() {
 
 <template>
   <AuthLayout
-    :heading="['让思考与节奏，', '自然流动。']"
-    description="在同一个安静的空间里，与 Agent 协作、完成代码，并让音乐陪伴专注。"
+    :heading="['让喜欢的旋律，', '自然流动。']"
+    description="搜索、发现并播放真实音乐，让每一次聆听都更贴近你的偏好。"
     footnote="账号支持用户名、邮箱或手机号登录"
   >
     <h2>欢迎回来</h2>
-    <p>登录并继续上一次的工作。</p>
-    <form class="form-grid" @submit.prevent="submit">
+    <p>登录并继续你的音乐旅程。</p>
+    <form class="form-grid" :autocomplete="rememberMe ? 'on' : 'off'" @submit.prevent="submit">
       <div class="field">
         <label for="account">账号</label>
-        <input id="account" v-model="account" autocomplete="username" placeholder="用户名、邮箱或手机号" required />
+        <input
+          id="account"
+          v-model="account"
+          name="username"
+          :autocomplete="rememberMe ? 'username' : 'off'"
+          placeholder="用户名、邮箱或手机号"
+          required
+        />
       </div>
       <div class="field">
         <label for="login-password">密码</label>
@@ -74,8 +83,9 @@ async function submit() {
           <input
             id="login-password"
             v-model="password"
+            name="password"
             :type="showPassword ? 'text' : 'password'"
-            autocomplete="current-password"
+            :autocomplete="rememberMe ? 'current-password' : 'off'"
             placeholder="输入密码"
             required
           />
@@ -88,13 +98,13 @@ async function submit() {
       <label class="remember-option" for="remember-me">
         <input id="remember-me" v-model="rememberMe" type="checkbox" />
         <span>
-          <strong>记住我</strong>
-          <small>30 天内自动登录，不保存密码</small>
+          <strong>记住账号和密码</strong>
+          <small>由浏览器密码管理器保存，30 天内自动登录</small>
         </span>
       </label>
       <p class="form-message" :class="{ success: notice && !error }" aria-live="polite">{{ error || notice }}</p>
       <button class="button wide" type="submit" :disabled="submitting">
-        {{ submitting ? '正在登录...' : '进入工作台' }}
+        {{ submitting ? '正在登录...' : '进入音乐空间' }}
       </button>
     </form>
     <div class="auth-switch">还没有账号？ <RouterLink to="/register">创建账号</RouterLink></div>

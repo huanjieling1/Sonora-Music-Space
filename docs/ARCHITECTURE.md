@@ -42,6 +42,7 @@ com.example.agent
 │   └── vo                返回给 Vue 的视图对象
 ├── repository            Spring Data JPA 数据访问接口
 ├── security              登录主体、认证查询和密码编码
+├── skill                 Agent Skill 定义、资源加载、工具绑定与覆盖校验
 ├── service               业务能力接口与 LangChain4j Agent 接口
 │   └── impl              业务实现、事务和持久化协作
 ├── tools                 Agent 可调用的工具
@@ -73,6 +74,12 @@ Service impl -> LangChain4j/SMTP/Music vendor adapters
 - Vue 组件不拼接后端地址、CSRF 头或 Cookie 策略，统一通过 `services/api.js` 访问 API。
 - 前端路由守卫只改善交互体验，最终权限必须由 Spring Security 和资源归属校验决定。
 - Agent Workflow 负责协作顺序，不负责 HTTP 和数据库细节。
+- Skill 是“目标级工作流 + 约束 + 工具白名单”，Tool 是单次、原子的可执行能力。主 Agent 构建时由
+  `AgentSkillRegistry` 从 `src/main/resources/agent-skills/*/SKILL.md` 加载 Skill，并把匹配规则动态追加到
+  System Message；工具参数和底层执行细节仍由 `@Tool` 维护，禁止把两者重新揉成巨大静态 Prompt。
+- 每个 Skill 的 `SKILL.md` 只允许标准 `name`、`description` 元数据；应用特有的 id、优先级和工具白名单
+  放在同目录 `tool-bindings.properties`。应用启动时必须校验绑定的 Tool 真实存在，并保证每个已注册
+  `@Tool` 至少被一个 Skill 覆盖；新增 Tool 而未补 Skill 时应快速失败。
 - 音乐推荐编排依赖 `MusicQueryPlanner` 和 `MusicCatalogProvider` 接口；规划器输出结构化
   `MusicSearchPlan`，曲库参数和播放协议封装在 QQ Music、Jamendo、Audius、YouTube 适配器中，不能泄漏到通用推荐模型。
 

@@ -9,8 +9,8 @@ import com.example.agent.service.AssistantAgent;
 import com.example.agent.service.MusicRecommendationService;
 import com.example.agent.service.MusicPersonalizationService;
 import com.example.agent.service.impl.MusicAgentSessionStore;
+import com.example.agent.skill.AgentSkillRegistry;
 import com.example.agent.tools.AgentActionContext;
-import com.example.agent.tools.DevelopmentTools;
 import com.example.agent.tools.MusicAgentTools;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.openai.OpenAiChatModel;
@@ -56,7 +56,8 @@ class MusicAgentSmokeTest {
         AssistantAgent assistant = AiServices.builder(AssistantAgent.class)
                 .chatModel(model(environment, apiKey))
                 .chatMemoryProvider(id -> MessageWindowChatMemory.builder().id(id).maxMessages(12).build())
-                .tools(new DevelopmentTools(), musicTools)
+                .tools(musicTools)
+                .systemMessageTransformer(new AgentSkillRegistry()::augmentSystemMessage)
                 .build();
         ConversationMemoryId memoryId = new ConversationMemoryId(
                 1L, UUID.fromString("55555555-5555-4555-8555-555555555555"));

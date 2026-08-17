@@ -16,6 +16,7 @@ import com.example.agent.model.vo.music.MusicPolicyStatusVo;
 import com.example.agent.model.vo.music.MusicPreferenceVo;
 import com.example.agent.model.vo.music.MusicProfileVo;
 import com.example.agent.model.vo.music.QqMusicStatusVo;
+import com.example.agent.model.vo.music.QqMusicQrLoginVo;
 import com.example.agent.model.vo.music.MusicLyricsVo;
 import com.example.agent.model.vo.music.MusicCatalogSearchVo;
 import com.example.agent.model.vo.music.QqPublicPlaylistVo;
@@ -106,8 +107,9 @@ public class MusicController {
             @RequestParam UUID searchId,
             @RequestParam String trackId,
             @AuthenticationPrincipal AppUserPrincipal user) {
-        return ApiResponse.ok("获取成功", Map.of("liked",
-                personalizationService.isTrackLiked(user.id(), searchId, trackId)));
+        return ApiResponse.ok("获取成功", Map.of(
+                "liked", personalizationService.isTrackLiked(user.id(), searchId, trackId),
+                "saved", personalizationService.isTrackSaved(user.id(), searchId, trackId)));
     }
 
     @GetMapping("/profile")
@@ -210,6 +212,28 @@ public class MusicController {
     @DeleteMapping("/qq/session")
     public ApiResponse<QqMusicStatusVo> clearQqSession() {
         return ApiResponse.ok("QQ 音乐登录态已清除", QqMusicStatusVo.from(qqMusicService.clearSession()));
+    }
+
+    @PostMapping("/qq/login/qr")
+    public ApiResponse<QqMusicQrLoginVo> startQqQrLogin(@AuthenticationPrincipal AppUserPrincipal user) {
+        return ApiResponse.ok("QQ 音乐登录二维码已生成",
+                QqMusicQrLoginVo.from(qqMusicService.startQrLogin(user.id())));
+    }
+
+    @GetMapping("/qq/login/qr/{loginId}")
+    public ApiResponse<QqMusicQrLoginVo> pollQqQrLogin(
+            @PathVariable String loginId,
+            @AuthenticationPrincipal AppUserPrincipal user) {
+        return ApiResponse.ok("QQ 音乐扫码状态已更新",
+                QqMusicQrLoginVo.from(qqMusicService.pollQrLogin(user.id(), loginId)));
+    }
+
+    @DeleteMapping("/qq/login/qr/{loginId}")
+    public ApiResponse<Map<String, Boolean>> cancelQqQrLogin(
+            @PathVariable String loginId,
+            @AuthenticationPrincipal AppUserPrincipal user) {
+        qqMusicService.cancelQrLogin(user.id(), loginId);
+        return ApiResponse.ok("QQ 音乐扫码登录已取消", Map.of("cancelled", true));
     }
 
     @GetMapping("/qq/play/{songMid}")

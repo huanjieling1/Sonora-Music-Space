@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/services/musicPlaybackTracker.test.js src/services/musicShuffle.test.js src/services/musicDiscoveryCache.test.js",
+    "test": "node --test src/services/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

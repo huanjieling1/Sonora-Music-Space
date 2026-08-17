@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUpdate, ref, watch } from 'vue'
 import { ArrowLeft, Disc3, ExternalLink, Languages, Music2 } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import { request } from '../services/api'
+import { runMusicExperienceTransition } from '../services/musicExperienceTransition'
+import { navigateBack } from '../services/navigation'
 import { useMusicStore } from '../stores/music'
 import MusicTrackActions from '../components/MusicTrackActions.vue'
 
@@ -19,14 +21,19 @@ let requestSequence = 0
 
 const provider = computed(() => String(route.params.provider || '').toLowerCase())
 const trackId = computed(() => String(route.params.trackId || ''))
+const viewedTrack = computed(() => {
+  route.fullPath
+  return window.history.state?.viewedTrack || null
+})
 const track = computed(() => {
-  const candidates = [music.currentTrack, ...music.queue].filter(Boolean)
+  const candidates = [viewedTrack.value, music.currentTrack, ...music.queue].filter(Boolean)
   return candidates.find(item => item.provider === provider.value && item.id === trackId.value) || null
 })
+const isCurrentTrack = computed(() => music.currentTrack?.provider === provider.value && music.currentTrack?.id === trackId.value)
 const lyricLines = computed(() => lyrics.value?.lines || [])
 const hasTranslations = computed(() => lyricLines.value.some(line => line.translation || line.romanization))
 const activeIndex = computed(() => {
-  if (!lyrics.value?.synced) return -1
+  if (!isCurrentTrack.value || !lyrics.value?.synced) return -1
   const currentMs = Math.max(0, Number(music.playbackCurrentTime) * 1000)
   let active = -1
   for (let index = 0; index < lyricLines.value.length; index += 1) {
@@ -72,18 +79,18 @@ function seekToLine(line) {
   music.seekTo(Number(line.timeMs) / 1000)
 }
 
-function goBack() {
-  const previous = window.history.state?.back
-  if (typeof previous === 'string' && previous.startsWith('/music')) router.back()
-  else router.push('/music')
+async function goBack() {
+  await runMusicExperienceTransition(() => {
+    return navigateBack(router)
+  }, 'exit')
 }
 </script>
 
 <template>
-  <main class="track-experience">
+  <main class="track-experience" style="view-transition-name: sonora-player-experience">
     <img v-if="track?.imageUrl" class="ambient-cover" :src="track.imageUrl" alt="" aria-hidden="true" />
     <header class="experience-topbar">
-      <button title="返回歌单" @click="goBack"><ArrowLeft :size="22" /></button>
+      <button title="返回上一页" @click="goBack"><ArrowLeft :size="22" /></button>
       <RouterLink to="/music"><Disc3 :size="20" /><strong>Sonora</strong><span>NOW PLAYING</span></RouterLink>
       <a v-if="track?.externalUrl" :href="track.externalUrl" target="_blank" rel="noreferrer" title="在来源网站查看"><ExternalLink :size="18" /></a>
       <span v-else></span>
@@ -92,7 +99,7 @@ function goBack() {
     <section v-if="track" class="experience-grid">
       <div class="artwork-stage">
         <div class="turntable">
-          <div class="record" :class="{ spinning: !music.playbackPaused }">
+          <div class="record" :class="{ spinning: isCurrentTrack && !music.playbackPaused }">
             <img v-if="track.imageUrl" :src="track.imageUrl" :alt="`${track.name} 封面`" />
             <span v-else><Music2 :size="54" /></span>
           </div>
@@ -101,7 +108,7 @@ function goBack() {
           <small>{{ sourceLabel }}</small>
         </div>
         <div class="artwork-meta">
-          <span>正在播放</span>
+          <span>{{ isCurrentTrack ? '正在播放' : '歌曲详情' }}</span>
           <h1>{{ track.name }}</h1>
           <p>{{ artistText }}<template v-if="track.album"> · {{ track.album }}</template></p>
           <MusicTrackActions :track="track" />
@@ -124,7 +131,7 @@ function goBack() {
               :key="`${line.timeMs ?? 'plain'}-${index}`"
               :ref="element => setLyricElement(element, index)"
               :class="{ active: index === activeIndex, passed: index < activeIndex }"
-              :disabled="line.timeMs == null"
+              :disabled="line.timeMs == null || !isCurrentTrack"
               @click="seekToLine(line)"
             >
               <strong>{{ line.text }}</strong>
@@ -133,7 +140,7 @@ function goBack() {
             </button>
           </div>
         </div>
-        <footer v-if="lyrics?.available"><span>{{ lyrics.synced ? '点击任意歌词可跳转播放进度' : '纯文本歌词' }}</span><span>歌词来源：{{ lyrics.source }}</span></footer>
+        <footer v-if="lyrics?.available"><span>{{ lyrics.synced ? (isCurrentTrack ? '点击任意歌词可跳转播放进度' : '开始播放后可点击歌词跳转进度') : '纯文本歌词' }}</span><span>歌词来源：{{ lyrics.source }}</span></footer>
       </section>
     </section>
 
