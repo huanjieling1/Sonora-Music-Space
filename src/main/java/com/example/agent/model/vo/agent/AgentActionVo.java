@@ -15,7 +15,11 @@ public record AgentActionVo(
         MusicRecommendationVo recommendation,
         MusicTrackVo track,
         QqPlaylistSearchVo playlistSearch,
-        QqArtistSearchVo artistSearch
+        QqArtistSearchVo artistSearch,
+        com.example.agent.model.bo.QqChartResultBo chartResult,
+        MusicProfileStoryVo profileStory,
+        com.example.agent.model.bo.ProactiveSuggestionsBo proactiveSuggestions,
+        MusicWorkflowProgressVo workflow
 ) {
     public static AgentActionVo from(AgentActionBo action) {
         return new AgentActionVo(
@@ -24,6 +28,10 @@ public record AgentActionVo(
                 action.recommendation() == null ? null : MusicRecommendationVo.from(action.recommendation()),
                 action.track() == null ? null : MusicTrackVo.from(action.track()),
                 action.playlistSearch() == null ? null : QqPlaylistSearchVo.from(action.playlistSearch()),
-                action.artistSearch() == null ? null : QqArtistSearchVo.from(action.artistSearch()));
+                action.artistSearch() == null ? null : QqArtistSearchVo.from(action.artistSearch()),
+                action.chartResult(),
+                action.profileStory() == null ? null : MusicProfileStoryVo.from(action.profileStory()),
+                action.proactiveSuggestions(),
+                action.workflow() == null ? null : MusicWorkflowProgressVo.from(action.workflow()));
     }
 }

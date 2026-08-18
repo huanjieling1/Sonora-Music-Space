@@ -37,6 +37,3 @@ runtime-tools/
 database/backups/
 *.sql.bak
 *.dump
-
-# Vendored external integration maintained as its own Git repository
-integrations/qq-music-api/

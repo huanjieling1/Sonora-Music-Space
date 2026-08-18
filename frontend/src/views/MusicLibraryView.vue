@@ -14,6 +14,7 @@ import { shuffleTracks } from '../services/musicShuffle'
 import { useAuthStore } from '../stores/auth'
 import { useMusicStore } from '../stores/music'
 import MusicTrackActions from '../components/MusicTrackActions.vue'
+import MusicChartHub from '../components/MusicChartHub.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,6 +47,9 @@ const qqHomePage = ref(1)
 const artistDetail = ref(null)
 const artistOpening = ref(false)
 const artistTab = ref('SONGS')
+const artistTrend = ref(null)
+const artistTrendWindow = ref('ALL_TIME')
+const artistTrendLoading = ref(false)
 const albumDetail = ref(null)
 const albumOpening = ref(false)
 const currentMoment = ref(new Date())
@@ -80,6 +84,11 @@ const artistTracks = computed(() => (artistDetail.value?.tracks || []).map(track
   ...track,
   _searchId: artistDetail.value?.searchId,
 })))
+const artistTrendTracks = computed(() => (artistTrend.value?.tracks || []).map(item => ({
+  ...item.track,
+  _trendRank: item.rank,
+  _bestOfficialRank: item.bestOfficialRank,
+})))
 const albumTracks = computed(() => (albumDetail.value?.tracks || []).map(track => ({ ...track, _searchId: albumDetail.value?.searchId })))
 
 const searchTabs = [
@@ -112,6 +121,7 @@ onMounted(() => {
 onBeforeUnmount(() => window.clearInterval(greetingClock))
 watch(() => [activePlaylistId.value, activeQqPlaylistId.value], async () => { await loadActivePlaylist() })
 watch(activeQqArtistMid, async () => { await loadArtistDetail() })
+watch(artistTrendWindow, async () => { if (activeQqArtistMid.value) await loadArtistTrend() })
 watch(activeQqAlbumMid, async () => { await loadAlbumDetail() })
 watch(() => music.playlistRevision, async () => {
   const mutation = music.lastPlaylistMutation
@@ -173,12 +183,31 @@ async function loadArtistDetail(options = {}) {
     })
     const result = await request(`/api/music/qq/artists/${encodeURIComponent(activeQqArtistMid.value)}?${params}`)
     artistDetail.value = result.data
+    await loadArtistTrend()
   } catch (error) {
     errorMessage.value = error.message
     if (error.status === 404) await router.replace('/music')
   } finally {
     artistOpening.value = false
   }
+}
+
+async function loadArtistTrend() {
+  if (!activeQqArtistMid.value) { artistTrend.value = null; return }
+  artistTrendLoading.value = true
+  try {
+    const name = artistDetail.value?.name || ''
+    const params = new URLSearchParams({ window: artistTrendWindow.value, limit: '20' })
+    if (name) params.set('artistName', name)
+    artistTrend.value = (await request(`/api/music/qq/artists/${encodeURIComponent(activeQqArtistMid.value)}/top-tracks?${params}`)).data
+  } catch {
+    artistTrend.value = null
+  } finally { artistTrendLoading.value = false }
+}
+
+function playArtistTrendTrack(index) {
+  const track = artistTrendTracks.value[index]
+  if (track) music.playTrack(track, artistTrendTracks.value)
 }
 
 async function loadAlbumDetail() {
@@ -656,6 +685,11 @@ function formatCompactCount(value) {
 
             <section v-if="artistTab === 'SONGS'" class="artist-song-section">
               <header><div><span>POPULAR TRACKS</span><h2>热门歌曲</h2></div><small>第 {{ artistDetail.songPage }} 页</small></header>
+              <div class="artist-trend-panel">
+                <header><div><strong>榜单热度信号</strong><small v-if="artistTrend">实际覆盖 {{ artistTrend.coverageStart || '尚未积累' }} 至 {{ artistTrend.coverageEnd || '尚未积累' }} · 非 QQ 官方热度分</small></div><nav><button v-for="item in [{id:'RECENT',label:'近期'},{id:'WEEK',label:'一周'},{id:'MONTH',label:'一月'},{id:'ALL_TIME',label:'已积累'}]" :key="item.id" :class="{ active: artistTrendWindow === item.id }" @click="artistTrendWindow = item.id">{{ item.label }}</button></nav></header>
+                <div v-if="artistTrendTracks.length" class="artist-trend-tracks"><button v-for="(track,index) in artistTrendTracks.slice(0,8)" :key="track.id" @click="playArtistTrendTrack(index)"><b>{{ track._trendRank }}</b><img v-if="track.imageUrl" :src="track.imageUrl" alt="" /><span v-else><Music2 :size="17" /></span><div><strong>{{ track.name }}</strong><small>官方榜单最佳第 {{ track._bestOfficialRank }} 名</small></div><Play :size="13" fill="currentColor" /></button></div>
+                <p v-else-if="!artistTrendLoading">当前覆盖周期内暂无这位歌手的上榜记录，下方仍展示 QQ 音乐歌手目录顺序。</p>
+              </div>
               <div class="artist-track-table">
                 <div class="artist-track-head"><span>#</span><span>歌曲</span><span>专辑</span><span>时长</span><span>操作</span></div>
                 <article v-for="(track, index) in artistTracks" :key="track.id" :class="{ playing: music.currentTrack?.id === track.id && music.currentTrack?.provider === track.provider }">
@@ -770,6 +804,8 @@ function formatCompactCount(value) {
           <div class="hero-copy"><div class="hero-kicker"><span>{{ greetingState.eyebrow }}</span><small>{{ greetingState.status }}</small></div><h1>{{ greetingState.salutation }}，{{ auth.user?.username || '音乐用户' }}</h1><p>{{ greetingState.message }}</p></div>
           <button class="hero-play" :disabled="!personalPlaylists.length" @click="personalPlaylists[0] && openPlaylist(personalPlaylists[0].id)"><Play :size="22" fill="currentColor" />播放最近生成</button>
         </section>
+
+        <MusicChartHub :conversation-id="conversationId" />
 
         <section class="content-section">
           <header><div><span class="eyebrow">MADE FOR YOU</span><h2>今天为你推荐</h2></div><small>结合当前场景与长期偏好</small></header>
@@ -1539,4 +1575,5 @@ function formatCompactCount(value) {
 .music-hero .hero-kicker small { border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 5px 8px; background: rgba(255,255,255,.055); color: #d7d1e8; font-size: 8px; font-weight: 760; letter-spacing: .06em; }
 .music-hero.is-holiday .hero-kicker small { border-color: rgba(255,215,126,.24); background: rgba(255,201,91,.09); color: #ffe1a2; }
 .music-hero .hero-copy p { max-width: 690px; line-height: 1.65; }
+.artist-trend-panel{margin:14px 0 18px;border:1px solid rgba(169,150,255,.16);border-radius:16px;padding:13px;background:linear-gradient(135deg,rgba(126,100,235,.08),rgba(11,13,19,.28))}.artist-trend-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.artist-trend-panel>header>div{display:grid;gap:4px}.artist-trend-panel>header strong{color:#ececf2;font-size:11px}.artist-trend-panel>header small{color:#737986;font-size:8px}.artist-trend-panel nav{display:flex;gap:4px}.artist-trend-panel nav button{border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:5px 7px;background:transparent;color:#7e8491;font-size:8px}.artist-trend-panel nav button.active{border-color:rgba(184,255,84,.23);background:rgba(184,255,84,.08);color:#b8ff54}.artist-trend-tracks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:11px}.artist-trend-tracks>button{display:grid;grid-template-columns:20px 38px minmax(0,1fr) 22px;align-items:center;gap:7px;min-width:0;border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:6px;background:rgba(7,8,13,.3);color:#808592;text-align:left}.artist-trend-tracks>button:hover{border-color:rgba(169,150,255,.25)}.artist-trend-tracks img,.artist-trend-tracks>button>span{display:grid;width:38px;height:38px;border-radius:8px;object-fit:cover;background:#22232d;place-items:center}.artist-trend-tracks div{display:grid;min-width:0;gap:3px}.artist-trend-tracks strong,.artist-trend-tracks small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.artist-trend-tracks strong{color:#e6e7ec;font-size:9px}.artist-trend-tracks small{font-size:7px}.artist-trend-panel>p{margin:11px 0 0;color:#737986;font-size:8px}@media(max-width:760px){.artist-trend-panel>header{display:grid}.artist-trend-tracks{grid-template-columns:1fr}}
 </style>

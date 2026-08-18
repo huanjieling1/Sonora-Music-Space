@@ -258,6 +258,131 @@ async function homePlaylists(requestUrl) {
   return { status: 200, body: { page, pageSize: limit, hasNext: playlists.length >= limit, playlists } }
 }
 
+async function fetchChartCatalog() {
+  const data = {
+    comm: { ct: 24, cv: 0 },
+    req: {
+      module: 'musicToplist.ToplistInfoServer',
+      method: 'GetAll',
+      param: {},
+    },
+  }
+  const url = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg')
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('data', JSON.stringify(data))
+  const payload = await upstreamJson(url, { Referer: 'https://y.qq.com/n/ryqq/toplist', Origin: 'https://y.qq.com' })
+  if (Number(payload?.req?.code) !== 0 || !Array.isArray(payload?.req?.data?.group)) {
+    throw new Error(`QQ_CHART_CATALOG_${payload?.req?.code ?? 'INVALID'}`)
+  }
+  return payload.req.data.group
+}
+
+function chartSummary(item, groupName = '') {
+  return {
+    id: Math.max(0, Number(item?.topId) || 0),
+    name: String(item?.title || '').trim(),
+    group: String(groupName || '').trim(),
+    period: String(item?.period || '').trim(),
+    updateTime: String(item?.updateTime || '').trim(),
+    coverUrl: secureQqImageUrl(item?.frontPicUrl || item?.headPicUrl || item?.musichallPicUrl),
+    description: String(item?.intro || item?.titleDetail || item?.musichallSubtitle || '').trim(),
+    total: Math.max(0, Number(item?.totalNum) || 0),
+  }
+}
+
+async function charts() {
+  const groups = await fetchChartCatalog()
+  return {
+    status: 200,
+    body: {
+      sourceType: 'QQ_OFFICIAL',
+      fetchedAt: new Date().toISOString(),
+      groups: groups.map(group => ({
+        name: String(group?.groupName || '').trim(),
+        charts: (Array.isArray(group?.toplist) ? group.toplist : [])
+          .map(item => chartSummary(item, group?.groupName))
+          .filter(item => item.id > 0 && item.name),
+      })).filter(group => group.name && group.charts.length),
+    },
+  }
+}
+
+async function chart(requestUrl) {
+  const chartId = Number.parseInt(requestUrl.searchParams.get('id') || '', 10)
+  const offset = Math.min(500, Math.max(0, Number.parseInt(requestUrl.searchParams.get('offset') || '0', 10)))
+  const limit = Math.min(100, Math.max(1, Number.parseInt(requestUrl.searchParams.get('limit') || '50', 10)))
+  let period = String(requestUrl.searchParams.get('period') || '').trim()
+  if (!Number.isInteger(chartId) || chartId <= 0 || chartId > 10000) {
+    return { status: 400, body: { code: 'INVALID_CHART_ID', message: 'QQ 音乐榜单标识不正确' } }
+  }
+  if (period && !/^[0-9_-]{1,20}$/.test(period)) {
+    return { status: 400, body: { code: 'INVALID_CHART_PERIOD', message: 'QQ 音乐榜单周期不正确' } }
+  }
+  const groups = await fetchChartCatalog()
+  let catalogItem = null
+  let groupName = ''
+  for (const group of groups) {
+    const item = (Array.isArray(group?.toplist) ? group.toplist : [])
+      .find(value => Number(value?.topId) === chartId)
+    if (item) {
+      catalogItem = item
+      groupName = String(group?.groupName || '').trim()
+      break
+    }
+  }
+  if (!catalogItem) {
+    return { status: 404, body: { code: 'CHART_NOT_FOUND', message: 'QQ 音乐榜单不存在' } }
+  }
+  if (!period) period = String(catalogItem.period || '').trim()
+  const data = {
+    comm: { ct: 24, cv: 0 },
+    req: {
+      module: 'musicToplist.ToplistInfoServer',
+      method: 'GetDetail',
+      param: { topId: chartId, offset, num: limit, period },
+    },
+  }
+  const url = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg')
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('data', JSON.stringify(data))
+  const payload = await upstreamJson(url, {
+    Referer: `https://y.qq.com/n/ryqq/toplist/${chartId}`,
+    Origin: 'https://y.qq.com',
+  })
+  const response = payload?.req
+  const detail = response?.data?.data
+  const infos = Array.isArray(response?.data?.songInfoList) ? response.data.songInfoList : []
+  const ranks = Array.isArray(detail?.song) ? detail.song : []
+  if (Number(response?.code) !== 0 || !detail) {
+    throw new Error(`QQ_CHART_DETAIL_${response?.code ?? 'INVALID'}`)
+  }
+  const entries = infos.map((info, index) => {
+    const rank = ranks[index] || {}
+    const track = playlistTrack(info)
+    return {
+      rank: Math.max(1, Number(rank.rank) || offset + index + 1),
+      rankType: Math.max(0, Number(rank.rankType) || 0),
+      rankValue: String(rank.rankValue || '0'),
+      singerMids: Array.isArray(info?.singer) ? info.singer.map(value => String(value?.mid || '')).filter(Boolean) : [],
+      track,
+    }
+  }).filter(item => item.track.songMid && item.track.name)
+  const summary = chartSummary({ ...catalogItem, ...detail }, groupName)
+  return {
+    status: 200,
+    body: {
+      sourceType: 'QQ_OFFICIAL',
+      fetchedAt: new Date().toISOString(),
+      chart: { ...summary, period: String(detail.period || period), total: Math.max(summary.total, Number(detail.totalNum) || 0) },
+      offset,
+      pageSize: limit,
+      hasNext: offset + entries.length < Math.max(summary.total, Number(detail.totalNum) || 0),
+      history: response?.data?.data?.history || { year: [], subPeriod: [] },
+      entries,
+    },
+  }
+}
+
 async function playlist(requestUrl) {
   const id = requestUrl.searchParams.get('id')?.trim() || ''
   const limit = Math.min(100, Math.max(1, Number.parseInt(requestUrl.searchParams.get('limit') || '60', 10)))
@@ -568,6 +693,10 @@ const server = http.createServer(async (request, response) => {
       result = await search(requestUrl)
     } else if (request.method === 'GET' && requestUrl.pathname === '/home/playlists') {
       result = await homePlaylists(requestUrl)
+    } else if (request.method === 'GET' && requestUrl.pathname === '/charts') {
+      result = await charts()
+    } else if (request.method === 'GET' && requestUrl.pathname === '/chart') {
+      result = await chart(requestUrl)
     } else if (request.method === 'GET' && requestUrl.pathname === '/playlist') {
       result = await playlist(requestUrl)
     } else if (request.method === 'GET' && requestUrl.pathname === '/artist') {

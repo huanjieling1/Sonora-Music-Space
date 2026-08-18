@@ -1,12 +1,17 @@
 package com.example.agent.tools;
 
+import com.example.agent.agent.contract.UserTasteContext;
+import com.example.agent.exception.AppException;
 import com.example.agent.model.ao.MusicRecommendationAo;
+import com.example.agent.model.ao.PreparedMusicRecommendationAo;
 import com.example.agent.model.bo.AgentActionType;
 import com.example.agent.model.bo.ConversationMemoryId;
 import com.example.agent.model.bo.MusicRecommendationBo;
 import com.example.agent.model.bo.MusicTrackBo;
 import com.example.agent.model.bo.QqMusicSearchBo;
 import com.example.agent.model.bo.QqMusicSearchType;
+import com.example.agent.model.bo.QqMusicPlaybackBo;
+import com.example.agent.model.bo.QqPublicPlaylistBo;
 import com.example.agent.model.bo.QqArtistDetailBo;
 import com.example.agent.service.MusicKeywordExtractor;
 import com.example.agent.service.MusicRecommendationService;
@@ -19,7 +24,9 @@ import com.example.agent.model.vo.music.MusicProfileVo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
+import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
@@ -29,6 +36,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import org.mockito.ArgumentCaptor;
 
 class MusicAgentToolsTest {
     private final MusicRecommendationService recommendationService = mock(MusicRecommendationService.class);
@@ -126,6 +135,59 @@ class MusicAgentToolsTest {
         verify(qqMusicService).search(42L, memoryId.conversationId(), "无畏契约",
                 QqMusicSearchType.PLAYLIST, 1, 12);
         verifyNoInteractions(recommendationService);
+    }
+
+    @Test
+    void randomPlaylistSkipsUnavailableTrackAndStartsTheNextVerifiedTrack() {
+        QqMusicService qqMusicService = mock(QqMusicService.class);
+        MusicAgentTools directTools = new MusicAgentTools(recommendationService, personalizationService,
+                sessionStore, actionContext, qqMusicService);
+        MusicTrackBo unavailable = track("qq:unavailable1", "Unavailable");
+        MusicTrackBo playable = track("qq:playable2", "Playable");
+        QqPublicPlaylistBo candidate = publicPlaylist("7001", List.of());
+        QqPublicPlaylistBo loaded = publicPlaylist("7001", List.of(unavailable, playable));
+        when(qqMusicService.publicPlaylists(1, 16)).thenReturn(List.of(candidate));
+        when(qqMusicService.publicPlaylist(42L, memoryId.conversationId(), "7001", 60, true))
+                .thenReturn(loaded);
+        when(qqMusicService.resolvePlayback("unavailable1", null))
+                .thenThrow(new AppException(HttpStatus.NOT_FOUND, "不可播放"));
+        when(qqMusicService.resolvePlayback("playable2", null))
+                .thenReturn(new QqMusicPlaybackBo(URI.create("https://audio.example/playable2"), "128"));
+
+        String result = directTools.playRandomQqPublicPlaylist();
+
+        assertThat(result).contains("Playable", "开始播放");
+        assertThat(actionContext.actions()).extracting(action -> action.type()).containsExactly(
+                AgentActionType.SHOW_MUSIC_RESULTS,
+                AgentActionType.QUEUE_MUSIC_RESULTS,
+                AgentActionType.PLAY_TRACK);
+        assertThat(actionContext.actions().get(0).recommendation().tracks())
+                .containsExactly(playable, unavailable);
+        assertThat(actionContext.actions().get(2).track()).isEqualTo(playable);
+    }
+
+    @Test
+    void randomPlaylistKeepsQueueWhenBoundedPlaybackProbeFindsNoPlayableTrack() {
+        QqMusicService qqMusicService = mock(QqMusicService.class);
+        MusicAgentTools directTools = new MusicAgentTools(recommendationService, personalizationService,
+                sessionStore, actionContext, qqMusicService);
+        MusicTrackBo first = track("qq:blocked1", "Blocked One");
+        MusicTrackBo second = track("qq:blocked2", "Blocked Two");
+        QqPublicPlaylistBo candidate = publicPlaylist("7002", List.of());
+        QqPublicPlaylistBo loaded = publicPlaylist("7002", List.of(first, second));
+        when(qqMusicService.publicPlaylists(1, 16)).thenReturn(List.of(candidate));
+        when(qqMusicService.publicPlaylist(42L, memoryId.conversationId(), "7002", 60, true))
+                .thenReturn(loaded);
+        when(qqMusicService.resolvePlayback(any(String.class), any()))
+                .thenThrow(new AppException(HttpStatus.NOT_FOUND, "不可播放"));
+
+        String result = directTools.playRandomQqPublicPlaylist();
+
+        assertThat(result).contains("未找到可播放曲目", "队列已保留");
+        assertThat(actionContext.actions()).extracting(action -> action.type()).containsExactly(
+                AgentActionType.SHOW_MUSIC_RESULTS,
+                AgentActionType.QUEUE_MUSIC_RESULTS);
+        assertThat(sessionStore.get(memoryId)).isPresent();
     }
 
     @Test
@@ -241,6 +303,43 @@ class MusicAgentToolsTest {
     }
 
     @Test
+    void coordinatorProfileUsesPreparedContractWithoutRereadingProfile() {
+        QqMusicService qqMusicService = mock(QqMusicService.class);
+        MusicKeywordExtractor keywordExtractor = mock(MusicKeywordExtractor.class);
+        MusicAgentTools directTools = new MusicAgentTools(recommendationService, personalizationService,
+                sessionStore, actionContext, qqMusicService, keywordExtractor);
+        String request = "根据我的喜好推荐适合跑步的歌";
+        var proposed = new com.example.agent.model.bo.MusicSearchPlan(
+                com.example.agent.model.bo.MusicSearchIntent.DISCOVERY, null, List.of(), null,
+                List.of(), List.of(), List.of("跑步"), List.of(), 0.9, null);
+        when(keywordExtractor.extract(request)).thenReturn(new MusicKeywordExtractor.ExtractedKeyword(
+                "跑步", com.example.agent.model.bo.MusicSearchIntent.DISCOVERY,
+                com.example.agent.model.bo.MusicUnderstandingBo.unresolved(), proposed));
+        UserTasteContext profile = new UserTasteContext("STABLE", "画像稳定", true,
+                100, 40, 3_600_000, 0.8,
+                List.of(new UserTasteContext.Signal("GENRE", "独立摇滚", "明确喜欢", 1, "like:rock")),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        var recommendation = new MusicRecommendationBo(
+                request, "跑步 独立摇滚", "画像排序结果", List.of("qq"),
+                List.of(track("qq:profile:2", "Running Match")));
+        when(recommendationService.recommendPrepared(any(PreparedMusicRecommendationAo.class)))
+                .thenReturn(recommendation);
+
+        String result = directTools.recommendMusic(request, profile, true);
+
+        ArgumentCaptor<PreparedMusicRecommendationAo> prepared =
+                ArgumentCaptor.forClass(PreparedMusicRecommendationAo.class);
+        verify(recommendationService).recommendPrepared(prepared.capture());
+        assertThat(prepared.getValue().command().description()).isEqualTo(request);
+        assertThat(prepared.getValue().command().refreshBatch()).isTrue();
+        assertThat(prepared.getValue().searchSeed()).isEqualTo("跑步 独立摇滚");
+        assertThat(prepared.getValue().preferredTerms()).containsExactly("独立摇滚");
+        assertThat(result).contains("Running Match");
+        verifyNoInteractions(personalizationService);
+        verifyNoInteractions(qqMusicService);
+    }
+
+    @Test
     void queueActionUsesLatestResultsInTheSameConversation() {
         MusicRecommendationBo recommendation = new MusicRecommendationBo(
                 "Mili", "Mili", "找到歌曲", List.of("qq"),
@@ -311,6 +410,13 @@ class MusicAgentToolsTest {
     private static QqMusicSearchBo playlistResult(String keyword, QqMusicSearchBo.Playlist playlist) {
         return new QqMusicSearchBo(null, keyword, QqMusicSearchType.PLAYLIST, 1, 8, 1, false,
                 List.of(), List.of(), List.of(), List.of(playlist), List.of(), List.of(), List.of());
+    }
+
+    private static QqPublicPlaylistBo publicPlaylist(String id, List<MusicTrackBo> tracks) {
+        return new QqPublicPlaylistBo(id, "测试公开歌单", "", "https://img/playlist", "测试用户",
+                "https://img/avatar", 1_000, tracks.size(), List.of("测试"),
+                "https://y.qq.com/n/ryqq/playlist/" + id, UUID.randomUUID(), tracks,
+                "qq-public-playlist-v1", com.example.agent.model.bo.MusicPersonalizationStatus.DISABLED);
     }
 
     private static MusicProfileVo profile(List<MusicProfileInsightVo> likes,

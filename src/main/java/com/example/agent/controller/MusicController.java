@@ -24,11 +24,15 @@ import com.example.agent.model.bo.MusicLyricsBo;
 import com.example.agent.model.bo.QqMusicSearchBo;
 import com.example.agent.model.bo.QqMusicSearchType;
 import com.example.agent.model.bo.QqArtistDetailBo;
+import com.example.agent.model.bo.QqChartCatalogBo;
+import com.example.agent.model.bo.QqChartDetailBo;
+import com.example.agent.model.bo.QqTrendReportBo;
 import com.example.agent.service.MusicRecommendationService;
 import com.example.agent.service.MusicFeedbackService;
 import com.example.agent.service.MusicPersonalizationService;
 import com.example.agent.service.QqMusicService;
 import com.example.agent.service.MusicCatalogSearchService;
+import com.example.agent.service.QqMusicChartService;
 import com.example.agent.security.AppUserPrincipal;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -53,17 +57,20 @@ public class MusicController {
     private final QqMusicService qqMusicService;
     private final MusicPersonalizationService personalizationService;
     private final MusicCatalogSearchService catalogSearchService;
+    private final QqMusicChartService chartService;
 
     public MusicController(MusicRecommendationService musicRecommendationService,
                            MusicFeedbackService musicFeedbackService,
                            QqMusicService qqMusicService,
                            MusicPersonalizationService personalizationService,
-                           MusicCatalogSearchService catalogSearchService) {
+                           MusicCatalogSearchService catalogSearchService,
+                           QqMusicChartService chartService) {
         this.musicRecommendationService = musicRecommendationService;
         this.musicFeedbackService = musicFeedbackService;
         this.qqMusicService = qqMusicService;
         this.personalizationService = personalizationService;
         this.catalogSearchService = catalogSearchService;
+        this.chartService = chartService;
     }
 
     @PostMapping("/feedback")
@@ -152,6 +159,40 @@ public class MusicController {
             @RequestParam(defaultValue = "12") int pageSize) {
         return ApiResponse.ok("QQ 音乐公开歌单加载完成", qqMusicService.publicPlaylists(page, pageSize)
                 .stream().map(QqPublicPlaylistVo::from).toList());
+    }
+
+    @GetMapping("/qq/charts")
+    public ApiResponse<QqChartCatalogBo> qqCharts() {
+        return ApiResponse.ok("QQ 音乐官方榜单目录加载完成", chartService.catalog());
+    }
+
+    @GetMapping("/qq/charts/{chartId}")
+    public ApiResponse<QqChartDetailBo> qqChart(
+            @PathVariable int chartId,
+            @RequestParam(required = false) String period,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "100") int limit) {
+        return ApiResponse.ok("QQ 音乐官方榜单加载完成",
+                chartService.chart(chartId, period, offset, limit));
+    }
+
+    @GetMapping("/qq/trending/artists")
+    public ApiResponse<QqTrendReportBo> qqTrendingArtists(
+            @RequestParam(defaultValue = "RECENT") String window,
+            @RequestParam(required = false) String group,
+            @RequestParam(defaultValue = "20") int limit) {
+        return ApiResponse.ok("热门歌手趋势加载完成",
+                chartService.trendingArtists(window, group, limit));
+    }
+
+    @GetMapping("/qq/artists/{artistMid}/top-tracks")
+    public ApiResponse<QqTrendReportBo> qqArtistTopTracks(
+            @PathVariable String artistMid,
+            @RequestParam(required = false) String artistName,
+            @RequestParam(defaultValue = "ALL_TIME") String window,
+            @RequestParam(defaultValue = "20") int limit) {
+        return ApiResponse.ok("歌手榜单热门歌曲加载完成",
+                chartService.artistTopTracks(artistMid, artistName, window, limit));
     }
 
     @GetMapping("/qq/search")

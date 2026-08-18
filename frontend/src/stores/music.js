@@ -4,7 +4,9 @@ import { defineStore } from 'pinia'
 export const useMusicStore = defineStore('music', {
   state: () => ({
     handledActionIds: [],
-    ...restorePlayerState(),
+    activeUserId: '',
+    queue: [],
+    currentTrack: null,
     playRequestId: 0,
     playbackCurrentTime: 0,
     playbackDuration: 0,
@@ -17,6 +19,22 @@ export const useMusicStore = defineStore('music', {
     lastPlaylistMutation: null,
   }),
   actions: {
+    initializePlayer(userId, checkpoint = null) {
+      const normalizedUserId = String(userId ?? '').trim()
+      const saved = restorePlayerState(normalizedUserId)
+      this.activeUserId = normalizedUserId
+      this.queue = saved.queue
+      this.currentTrack = saved.currentTrack
+      if (!this.currentTrack && checkpoint?.track?.id) {
+        this.queue = uniqueTracks([...(checkpoint.queue || []), checkpoint.track])
+        this.currentTrack = this.queue.find(item => trackKey(item) === trackKey(checkpoint.track)) || checkpoint.track
+      }
+      if (this.currentTrack && !this.queue.some(item => trackKey(item) === trackKey(this.currentTrack))) {
+        this.queue.push(this.currentTrack)
+      }
+      this.resetPlaybackTelemetry()
+      persistPlayerState(this)
+    },
     applyAgentActions(actions) {
       const handled = new Set(this.handledActionIds)
       const incoming = Array.isArray(actions) ? actions : []
@@ -123,12 +141,12 @@ export const useMusicStore = defineStore('music', {
   },
 })
 
-const STORAGE_KEY = 'sonora.music.player.v1'
+const STORAGE_PREFIX = 'sonora.music.player.v2'
 
-function restorePlayerState() {
-  if (typeof window === 'undefined') return { queue: [], currentTrack: null }
+function restorePlayerState(userId) {
+  if (typeof window === 'undefined' || !userId) return { queue: [], currentTrack: null }
   try {
-    const saved = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || '{}')
+    const saved = JSON.parse(window.sessionStorage.getItem(`${STORAGE_PREFIX}.${userId}`) || '{}')
     return {
       queue: Array.isArray(saved.queue) ? uniqueTracks(saved.queue) : [],
       currentTrack: saved.currentTrack?.id ? saved.currentTrack : null,
@@ -139,9 +157,9 @@ function restorePlayerState() {
 }
 
 function persistPlayerState(store) {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined' || !store.activeUserId) return
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+    window.sessionStorage.setItem(`${STORAGE_PREFIX}.${store.activeUserId}`, JSON.stringify({
       queue: store.queue,
       currentTrack: store.currentTrack,
     }))

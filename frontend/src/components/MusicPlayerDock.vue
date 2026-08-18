@@ -3,13 +3,21 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronsDown, ListMusic, Maximize2, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import { request } from '../services/api'
+import {
+  clearPlaybackCheckpoint,
+  readPlaybackCheckpoint,
+  resumeSecondsFor,
+  savePlaybackCheckpoint,
+} from '../services/musicPlaybackCheckpoint'
 import { runMusicExperienceTransition } from '../services/musicExperienceTransition'
-import { createPlaybackSession, finishPlayback, observePlayback, startPlayback } from '../services/musicPlaybackTracker'
+import { createPlaybackSession, finishPlayback, observePlayback, seekPlayback, startPlayback } from '../services/musicPlaybackTracker'
+import { useAuthStore } from '../stores/auth'
 import { useMusicStore } from '../stores/music'
 import MusicTrackActions from './MusicTrackActions.vue'
 import { returnState } from '../services/navigation'
 
 const props = defineProps({ immersive: { type: Boolean, default: false } })
+const auth = useAuthStore()
 const music = useMusicStore()
 const router = useRouter()
 const route = useRoute()
@@ -43,6 +51,9 @@ let playback = null
 let lastVolume = Number(volume.value) > 0 ? Number(volume.value) : 0.72
 let dragState = null
 let suppressTrackClick = false
+let pendingResumeSeconds = 0
+let lastCheckpointAt = 0
+let lastProgressReportAt = 0
 
 const current = computed(() => music.currentTrack)
 const volumePercent = computed(() => Math.round(Number(volume.value) * 100))
@@ -69,7 +80,11 @@ const queueStyle = computed(() => {
 
 onMounted(async () => {
   window.addEventListener('resize', handleViewportResize)
+  window.addEventListener('pagehide', handlePlaybackInterrupted)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('pointerdown', handleQueueOutsidePointerDown, true)
+  const checkpoint = readCurrentCheckpoint()
+  music.initializePlayer(auth.user?.id, checkpoint)
   await nextTick()
   constrainDockPosition()
   initializeAudio()
@@ -78,6 +93,7 @@ onMounted(async () => {
 
 watch(() => music.playRequestId, async () => {
   if (!music.currentTrack) {
+    clearCurrentCheckpoint(playback?.track)
     stopPlayers()
     return
   }
@@ -88,8 +104,11 @@ watch(() => music.seekRequestId, () => seekTo(music.seekTargetSeconds))
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleViewportResize)
+  window.removeEventListener('pagehide', handlePlaybackInterrupted)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('pointerdown', handleQueueOutsidePointerDown, true)
   removeDockDragListeners()
+  persistCurrentCheckpoint(true, playback?.track)
   finishCurrent('unmount')
   stopPlayers()
   audio?.removeAttribute('src')
@@ -105,6 +124,8 @@ function initializeAudio() {
   audio.addEventListener('pause', () => {
     paused.value = true
     publishPlaybackState()
+    persistCurrentCheckpoint(true)
+    reportProgress()
   })
   audio.addEventListener('ended', handleEnded)
   audio.addEventListener('timeupdate', () => {
@@ -112,12 +133,17 @@ function initializeAudio() {
     if (Number.isFinite(audio.duration) && audio.duration > 0) duration.value = audio.duration
     publishPlaybackState()
     observeProgress()
+    persistCurrentCheckpoint()
   })
   audio.addEventListener('loadedmetadata', () => {
     if (Number.isFinite(audio.duration) && audio.duration > 0) duration.value = audio.duration
+    applyPendingAudioResume()
     publishPlaybackState()
   })
-  audio.addEventListener('canplay', () => { ready.value = true })
+  audio.addEventListener('canplay', () => {
+    ready.value = true
+    applyPendingAudioResume()
+  })
   audio.addEventListener('error', () => {
     if (current.value?.playbackType !== 'audio') return
     ready.value = false
@@ -130,9 +156,14 @@ function initializeAudio() {
 async function loadCurrentTrack() {
   const track = current.value
   if (!track) return
+  persistCurrentCheckpoint(true, playback?.track)
   await finishCurrent('switch')
-  playback = createPlaybackSession(track)
-  currentTime.value = 0
+  const checkpoint = readCurrentCheckpoint()
+  pendingResumeSeconds = resumeSecondsFor(checkpoint, track)
+  playback = createPlaybackSession(track,
+    pendingResumeSeconds > 0 && checkpoint?.playbackSessionId ? checkpoint.playbackSessionId : undefined,
+    pendingResumeSeconds > 0 ? checkpoint?.listenedMs : 0)
+  currentTime.value = pendingResumeSeconds
   duration.value = Math.max(0, Number(track.durationMs || 0) / 1000)
   quality.value = track.provider === 'qq' ? 'detecting' : ''
   publishPlaybackState()
@@ -165,6 +196,8 @@ async function playAudio(track) {
     audio.src = url
     audio.load()
   }
+  if (pendingResumeSeconds > 0 && audio.readyState < 1) await waitForAudioMetadata()
+  applyPendingAudioResume()
   audio.volume = Number(volume.value)
   ready.value = true
   try {
@@ -173,6 +206,36 @@ async function playAudio(track) {
     paused.value = true
     publishPlaybackState()
     errorMessage.value = '浏览器阻止了自动播放，请点击下方播放按钮。'
+  }
+}
+
+function waitForAudioMetadata() {
+  if (!audio || audio.readyState >= 1) return Promise.resolve()
+  return new Promise(resolve => {
+    const timeout = window.setTimeout(done, 5000)
+    audio.addEventListener('loadedmetadata', done)
+    audio.addEventListener('error', done)
+    function done() {
+      window.clearTimeout(timeout)
+      audio?.removeEventListener('loadedmetadata', done)
+      audio?.removeEventListener('error', done)
+      resolve()
+    }
+  })
+}
+
+function applyPendingAudioResume() {
+  if (!audio || pendingResumeSeconds <= 0 || audio.readyState < 1) return
+  const maximum = Number.isFinite(audio.duration) && audio.duration > 0
+    ? Math.max(0, audio.duration - 0.25)
+    : pendingResumeSeconds
+  const target = Math.min(pendingResumeSeconds, maximum)
+  try {
+    audio.currentTime = target
+    currentTime.value = target
+    pendingResumeSeconds = 0
+  } catch {
+    // Some media sources only allow seeking after canplay; loadedmetadata will retry.
   }
 }
 
@@ -189,6 +252,8 @@ async function playYoutube(track) {
           onReady: event => {
             ready.value = true
             event.target.setVolume(volumePercent.value)
+            if (pendingResumeSeconds > 0) event.target.seekTo(pendingResumeSeconds, true)
+            pendingResumeSeconds = 0
             event.target.playVideo()
           },
           onStateChange: event => {
@@ -200,6 +265,8 @@ async function playYoutube(track) {
             if (event.data === window.YT.PlayerState.PAUSED) {
               paused.value = true
               publishPlaybackState()
+              persistCurrentCheckpoint(true)
+              reportProgress()
             }
             if (event.data === window.YT.PlayerState.ENDED) handleEnded()
           },
@@ -214,7 +281,8 @@ async function playYoutube(track) {
     } else {
       ready.value = true
       youtube.setVolume(volumePercent.value)
-      youtube.loadVideoById(track.playbackUrl)
+      youtube.loadVideoById({ videoId: track.playbackUrl, startSeconds: pendingResumeSeconds })
+      pendingResumeSeconds = 0
     }
   } catch (error) {
     paused.value = true
@@ -262,44 +330,57 @@ async function toggle() {
 async function handleStarted() {
   paused.value = false
   publishPlaybackState()
-  const result = startPlayback(playback, current.value)
+  const result = startPlayback(playback, current.value, Math.round(currentTime.value * 1000))
   playback = result.state
-  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs)
+  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs, playback.listenedMs)
 }
 
 async function observeProgress() {
   if (!playback || playback.track.id !== current.value?.id) return
   const result = observePlayback(playback, Math.round(currentTime.value * 1000), Math.round(duration.value * 1000))
   playback = result.state
-  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs)
+  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs, playback.listenedMs)
 }
 
 async function finishCurrent(reason) {
   if (!playback) return
   const result = finishPlayback(playback, Math.round(currentTime.value * 1000), Math.round(duration.value * 1000), reason)
   playback = result.state
-  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs)
+  if (result.event) await sendEvent(playback.track, result.event.type, result.event.playbackMs, playback.listenedMs)
 }
 
 async function handleEnded() {
   await finishCurrent('ended')
+  clearCurrentCheckpoint(current.value)
   music.playNext()
 }
 
-async function sendEvent(track, eventType, playbackMs = null) {
+async function sendEvent(track, eventType, playbackMs = null, listenedMs = null, silent = false) {
   if (!track?._searchId || !track.id) return
   try {
     await request('/api/music/events', {
       method: 'POST', keepalive: true,
       body: JSON.stringify({
-        eventId: crypto.randomUUID(), searchId: track._searchId,
+        eventId: crypto.randomUUID(), playbackSessionId: playback?.sessionId || null,
+        searchId: track._searchId,
         trackId: track.id, eventType,
         playbackMs: playbackMs == null ? null : Math.max(0, Math.round(playbackMs)),
+        listenedMs: listenedMs == null ? null : Math.max(0, Math.round(listenedMs)),
       }),
     })
   } catch (error) {
-    errorMessage.value = error.message
+    if (!silent) errorMessage.value = error.message
   }
+}
+
+function reportProgress(force = false) {
+  if (!playback?.started || !playback.track?._searchId) return
+  const now = Date.now()
+  if (!force && now - lastProgressReportAt < 10000) return
+  const playbackMs = Math.max(playback.maxMs || 0, Math.round(currentTime.value * 1000))
+  if (playbackMs < 2000) return
+  lastProgressReportAt = now
+  void sendEvent(playback.track, 'PROGRESS', playbackMs, playback.listenedMs, true)
 }
 
 function seek(event) {
@@ -312,7 +393,9 @@ function seekTo(value) {
   currentTime.value = target
   if (current.value.playbackType === 'youtube') youtube?.seekTo?.(target, true)
   else if (audio) audio.currentTime = target
+  playback = seekPlayback(playback, Math.round(target * 1000))
   publishPlaybackState()
+  persistCurrentCheckpoint(true)
 }
 
 function setVolume() {
@@ -344,6 +427,7 @@ function syncYoutube() {
   if (!seeking.value && position >= 0) currentTime.value = position
   publishPlaybackState()
   observeProgress()
+  persistCurrentCheckpoint()
 }
 
 function startYoutubeTimer() {
@@ -371,6 +455,39 @@ function publishPlaybackState() {
     paused: Boolean(paused.value),
     quality: quality.value,
   })
+}
+
+function readCurrentCheckpoint() {
+  return readPlaybackCheckpoint(window.localStorage, auth.user?.id)
+}
+
+function persistCurrentCheckpoint(force = false, track = current.value) {
+  if (!track?.id || !auth.user?.id) return
+  const now = Date.now()
+  if (!force && now - lastCheckpointAt < 2000) return
+  const saved = savePlaybackCheckpoint(window.localStorage, auth.user.id, {
+    track,
+    queue: music.queue,
+    positionSeconds: Number(currentTime.value),
+    durationSeconds: Number(duration.value),
+    playbackSessionId: playback?.sessionId || '',
+    listenedMs: playback?.listenedMs || 0,
+  }, now)
+  if (saved) lastCheckpointAt = now
+}
+
+function clearCurrentCheckpoint(track = current.value) {
+  if (!track?.id || !auth.user?.id) return
+  clearPlaybackCheckpoint(window.localStorage, auth.user.id, track)
+}
+
+function handlePlaybackInterrupted() {
+  persistCurrentCheckpoint(true, playback?.track || current.value)
+  reportProgress(true)
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') handlePlaybackInterrupted()
 }
 
 async function openCurrentTrack() {

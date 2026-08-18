@@ -2,6 +2,7 @@ package com.example.agent.model.bo;
 
 public enum MusicBehaviorEventType {
     PLAY_START(null),
+    PROGRESS(null),
     COMPLETE(1.0),
     SKIP(-1.0),
     LIKE(2.0),

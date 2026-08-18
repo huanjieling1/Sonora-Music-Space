@@ -90,6 +90,23 @@ class MusicPersonalizationIntegrationTest {
     }
 
     @Test
+    void persistsBatchSequenceAndRestoresRecentExposureTracksForRefresh() {
+        expose(userA, conversationA, track("qq:batch:1", "第一批歌曲", "歌手甲"));
+        expose(userA, conversationA, track("qq:batch:2", "第二批歌曲", "歌手乙"));
+        String fingerprint = MusicTrackIdentity.sha256(MusicTextNormalizer.normalize("测试推荐"));
+
+        assertThat(repository.nextBatchSequence(userA, conversationA, fingerprint)).isEqualTo(3);
+        assertThat(repository.recentExposureTracks(userA, conversationA, 6))
+                .extracting(MusicPersonalizationRepository.RecentExposureTrack::title)
+                .containsExactlyInAnyOrder("第二批歌曲", "第一批歌曲");
+        assertThat(jdbc.queryForList("""
+                SELECT refresh_source FROM music_recommendation_exposure
+                 WHERE user_id = ? AND conversation_id = ? ORDER BY created_at
+                """, String.class, userA, conversationA.toString()))
+                .containsExactly("STANDARD", "STANDARD");
+    }
+
+    @Test
     void unlikeOnlyRemovesTheLikeAndNeverCreatesNegativePreference() {
         UUID exposure = expose(userA, conversationA, track("qq:liked", "Liked Track", "Artist A"));
 
@@ -199,6 +216,35 @@ class MusicPersonalizationIntegrationTest {
                 .isZero();
     }
 
+    @Test
+    void aggregatesOnePlaybackSessionAcrossProgressUpdatesWithoutDoubleCounting() {
+        MusicTrackBo track = track("qq:session", "Session Track", "Artist A");
+        UUID exposure = expose(userA, conversationA, track);
+        UUID session = UUID.randomUUID();
+
+        assertThat(personalizationService.recordEvent(userA, new MusicBehaviorEventRequest(
+                UUID.randomUUID(), session, exposure, track.id(), MusicBehaviorEventType.PLAY_START, 0L, 0L))
+                .duplicate()).isFalse();
+        personalizationService.recordEvent(userA, new MusicBehaviorEventRequest(
+                UUID.randomUUID(), session, exposure, track.id(), MusicBehaviorEventType.PROGRESS, 30_000L, 25_000L));
+        personalizationService.recordEvent(userA, new MusicBehaviorEventRequest(
+                UUID.randomUUID(), session, exposure, track.id(), MusicBehaviorEventType.PROGRESS, 45_000L, 40_000L));
+        personalizationService.recordEvent(userA, new MusicBehaviorEventRequest(
+                UUID.randomUUID(), session, exposure, track.id(), MusicBehaviorEventType.COMPLETE, 110_000L, 100_000L));
+
+        assertThat(personalizationService.recordEvent(userA, new MusicBehaviorEventRequest(
+                UUID.randomUUID(), session, exposure, track.id(), MusicBehaviorEventType.PLAY_START, 0L, 0L))
+                .duplicate()).isTrue();
+        var analytics = personalizationService.profile(userA).analytics();
+        assertThat(analytics.playCount()).isEqualTo(1);
+        assertThat(analytics.completeCount()).isEqualTo(1);
+        assertThat(analytics.totalPlaybackMs()).isEqualTo(100_000);
+        assertThat(analytics.topTracks()).singleElement().satisfies(item -> {
+            assertThat(item.title()).isEqualTo("Session Track");
+            assertThat(item.playCount()).isEqualTo(1);
+        });
+    }
+
     private UUID expose(long userId, UUID conversationId, MusicTrackBo track) {
         UUID exposure = UUID.randomUUID();
         var item = new MusicPersonalizationRepository.ExposureTrack(track, Map.of("catalog", 1),
@@ -223,6 +269,10 @@ class MusicPersonalizationIntegrationTest {
         jdbc.update("DELETE FROM music_playlist");
         jdbc.update("DELETE FROM music_graph_outbox");
         jdbc.update("DELETE FROM music_behavior_event");
+        jdbc.update("DELETE FROM music_playback_session");
+        jdbc.update("DELETE FROM music_user_track_stat");
+        jdbc.update("DELETE FROM music_track_enrichment");
+        jdbc.update("DELETE FROM music_track_tag");
         jdbc.update("DELETE FROM music_preference_memory");
         jdbc.update("DELETE FROM music_recommendation_item");
         jdbc.update("DELETE FROM music_recommendation_exposure");

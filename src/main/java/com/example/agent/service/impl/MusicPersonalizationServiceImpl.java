@@ -23,17 +23,23 @@ public class MusicPersonalizationServiceImpl implements MusicPersonalizationServ
     private final MusicEmbeddingClient embeddings;
     private final Neo4jMusicGraphClient graph;
     private final MusicProfileSummaryBuilder summaryBuilder;
+    private final QqTrackTagEnricher tagEnricher;
+    private final MusicProfileAnalyticsBuilder analyticsBuilder;
 
     public MusicPersonalizationServiceImpl(MusicPersonalizationRepository repository,
                                            MusicPersonalizationProperties properties,
                                            MusicEmbeddingClient embeddings,
                                            Neo4jMusicGraphClient graph,
-                                           MusicProfileSummaryBuilder summaryBuilder) {
+                                           MusicProfileSummaryBuilder summaryBuilder,
+                                           QqTrackTagEnricher tagEnricher,
+                                           MusicProfileAnalyticsBuilder analyticsBuilder) {
         this.repository = repository;
         this.properties = properties;
         this.embeddings = embeddings;
         this.graph = graph;
         this.summaryBuilder = summaryBuilder;
+        this.tagEnricher = tagEnricher;
+        this.analyticsBuilder = analyticsBuilder;
     }
 
     @Override
@@ -42,8 +48,13 @@ public class MusicPersonalizationServiceImpl implements MusicPersonalizationServ
                 .orElseThrow(() -> new AppException(HttpStatus.UNPROCESSABLE_ENTITY,
                         "该歌曲不属于当前用户的这次推荐曝光"));
         validatePlaybackEvent(request.eventType(), request.playbackMs(), item.track().durationMs());
-        var result = repository.recordEvent(userId, request.eventId(), request.searchId(), item,
-                request.eventType(), request.playbackMs());
+        if (request.eventType() == MusicBehaviorEventType.PROGRESS && request.playbackSessionId() == null) {
+            throw new AppException(HttpStatus.UNPROCESSABLE_ENTITY, "播放进度必须关联播放会话");
+        }
+        tagEnricher.enrich(item.trackKey(), item.track());
+        var result = repository.recordEvent(userId, request.eventId(), request.playbackSessionId(),
+                request.searchId(), item,
+                request.eventType(), request.playbackMs(), request.listenedMs());
         return new MusicEventVo(true, result.duplicate(),
                 result.duplicate() ? "该播放事件已经记录" : "播放行为已安全记录");
     }
@@ -64,9 +75,12 @@ public class MusicPersonalizationServiceImpl implements MusicPersonalizationServ
         var stats = repository.profileStats(userId);
         List<MusicPreferenceVo> explicit = all.stream().filter(item -> "L1".equals(item.layer())).toList();
         List<MusicPreferenceVo> inferred = all.stream().filter(item -> "L2".equals(item.layer())).toList();
+        var analytics = analyticsBuilder.build(repository.listeningTotals(userId),
+                repository.topTracks(userId, 10), repository.topArtists(userId, 10),
+                repository.topTags(userId, 12));
         return new MusicProfileVo(
                 explicit, inferred, stats.labeledEvents(), stats.exposures(),
-                summaryBuilder.build(all, stats.labeledEvents(), stats.exposures()));
+                summaryBuilder.build(all, stats.labeledEvents(), stats.exposures()), analytics);
     }
 
     @Override
@@ -113,6 +127,11 @@ public class MusicPersonalizationServiceImpl implements MusicPersonalizationServ
                 throw new AppException(HttpStatus.UNPROCESSABLE_ENTITY,
                         "歌曲未达到 90% 播放进度，不能记为播完");
             }
+        }
+        if (type == MusicBehaviorEventType.PROGRESS
+                && (playbackMs == null || playbackMs < 2_000)) {
+            throw new AppException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "播放不足 2 秒时不记录进度");
         }
     }
 

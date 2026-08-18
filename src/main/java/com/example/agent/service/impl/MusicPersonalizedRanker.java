@@ -49,6 +49,13 @@ public class MusicPersonalizedRanker {
     public RankingResult rank(UUID exposureId, MusicRecommendationAo command, MusicExecutionPlan plan,
                               List<MusicTrackBo> catalogCandidates, Set<String> availableProviders,
                               int limit) {
+        return rank(exposureId, command, plan, catalogCandidates, availableProviders, limit,
+                MusicRecommendationNoveltyPolicy.Context.standard("direct", command.page()));
+    }
+
+    public RankingResult rank(UUID exposureId, MusicRecommendationAo command, MusicExecutionPlan plan,
+                              List<MusicTrackBo> catalogCandidates, Set<String> availableProviders,
+                              int limit, MusicRecommendationNoveltyPolicy.Context novelty) {
         if (!properties.enabled() || !command.personalizedRequest()) {
             List<MusicTrackBo> tracks = catalogCandidates.stream().limit(limit)
                     .map(track -> baselineReason(track, plan)).toList();
@@ -150,6 +157,7 @@ public class MusicPersonalizedRanker {
         boolean exactTrack = plan.intent() == MusicSearchIntent.EXACT_TRACK
                 && plan.hardConstraints().track() != null;
         List<CandidateState> eligible = candidates.values().stream()
+                .filter(state -> novelty == null || !novelty.excludes(state.track))
                 .filter(state -> !contextRejected.contains(state.track.id()))
                 .filter(state -> !dislikedKeys.contains(state.trackKey)
                         || (exactTrack && entityMatches(state.track.name(), plan.hardConstraints().track())))

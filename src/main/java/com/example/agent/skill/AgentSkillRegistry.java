@@ -1,5 +1,7 @@
 package com.example.agent.skill;
 
+import com.example.agent.agent.contract.MusicAutonomyLevel;
+import com.example.agent.agent.contract.MusicSupportContext;
 import com.example.agent.tools.MusicAgentTools;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.core.io.Resource;
@@ -117,8 +119,58 @@ public class AgentSkillRegistry {
                 .map(String::trim)
                 .filter(value -> !value.isEmpty())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+        LinkedHashSet<String> activationTerms = Arrays.stream(
+                        bindings.getProperty("triggers", document.name()).split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        AgentSkillSupportAffordance supportAffordance = supportAffordance(bindings, id);
         return new AgentSkillDefinition(id, document.name(), document.description(), priority,
-                tools, document.instructions(), skillResource.getDescription());
+                tools, activationTerms, document.instructions(), skillResource.getDescription(), supportAffordance);
+    }
+
+    private static AgentSkillSupportAffordance supportAffordance(Properties bindings, String skillId) {
+        boolean proactive = Boolean.parseBoolean(bindings.getProperty("proactive", "false").trim());
+        if (!proactive) return AgentSkillSupportAffordance.disabled();
+        Set<MusicSupportContext.EmotionalSignal> contexts = enumSet(bindings, "support-contexts",
+                MusicSupportContext.EmotionalSignal.class, skillId);
+        Set<MusicSupportContext.SupportGoal> goals = enumSet(bindings, "support-goals",
+                MusicSupportContext.SupportGoal.class, skillId);
+        MusicAutonomyLevel autonomy = enumValue(bindings.getProperty("autonomy", "DISABLED"),
+                MusicAutonomyLevel.class, "autonomy", skillId);
+        String outputAction = bindings.getProperty("output-action", "").trim();
+        int weight;
+        try {
+            weight = Integer.parseInt(bindings.getProperty("proactive-weight", "50").trim());
+        } catch (NumberFormatException exception) {
+            throw new IllegalStateException("Invalid proactive-weight in skill " + skillId, exception);
+        }
+        if (contexts.isEmpty() || goals.isEmpty() || outputAction.isBlank()
+                || autonomy == MusicAutonomyLevel.DISABLED) {
+            throw new IllegalStateException("Proactive skill " + skillId
+                    + " must declare support-contexts, support-goals, autonomy and output-action");
+        }
+        return new AgentSkillSupportAffordance(true, contexts, goals, autonomy, outputAction, weight);
+    }
+
+    private static <E extends Enum<E>> Set<E> enumSet(Properties properties, String key,
+                                                       Class<E> type, String skillId) {
+        LinkedHashSet<E> values = new LinkedHashSet<>();
+        for (String raw : properties.getProperty(key, "").split(",")) {
+            String value = raw.trim();
+            if (!value.isEmpty()) values.add(enumValue(value, type, key, skillId));
+        }
+        return Collections.unmodifiableSet(values);
+    }
+
+    private static <E extends Enum<E>> E enumValue(String value, Class<E> type,
+                                                    String key, String skillId) {
+        try {
+            return Enum.valueOf(type, value.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException("Invalid " + key + " in skill " + skillId + ": " + value,
+                    exception);
+        }
     }
 
     static SkillDocument parseSkillDocument(String markdown, String source) {
@@ -210,8 +262,13 @@ public class AgentSkillRegistry {
             result.append("\n\n## Skill：").append(skill.id())
                     .append("\n名称：").append(skill.name())
                     .append("\n适用场景：").append(skill.description())
-                    .append("\n允许工具：").append(String.join(", ", skill.tools()))
-                    .append("\n\n").append(skill.instructions());
+                    .append("\n允许工具：").append(String.join(", ", skill.tools()));
+            if (skill.supportAffordance().proactive()) {
+                result.append("\n可主动帮助的目标：")
+                        .append(skill.supportAffordance().goals())
+                        .append("\n主动执行级别：").append(skill.supportAffordance().autonomy());
+            }
+            result.append("\n\n").append(skill.instructions());
         }
         return result.toString().strip();
     }

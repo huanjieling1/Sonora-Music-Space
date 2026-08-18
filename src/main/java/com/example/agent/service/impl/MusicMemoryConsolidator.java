@@ -33,7 +33,7 @@ public class MusicMemoryConsolidator {
                         .add(evidence.exposureId(), evidence.reward());
             }
             tags(evidence.features()).forEach(tag -> signals
-                    .computeIfAbsent(new SignalKey(MusicPreferenceType.TAG, tag), ignored -> new Accumulator())
+                    .computeIfAbsent(tag, ignored -> new Accumulator())
                     .add(evidence.exposureId(), evidence.reward()));
         }
         byUser.forEach((userId, signals) -> {
@@ -61,13 +61,29 @@ public class MusicMemoryConsolidator {
         });
     }
 
-    private static Set<String> tags(Map<String, Object> features) {
+    private static Set<SignalKey> tags(Map<String, Object> features) {
         Object raw = features.get("tags");
         if (!(raw instanceof List<?> values)) return Set.of();
-        Set<String> result = new LinkedHashSet<>();
-        values.stream().map(String::valueOf).map(String::strip)
-                .filter(value -> !value.isBlank()).forEach(result::add);
+        Set<SignalKey> result = new LinkedHashSet<>();
+        values.stream().map(String::valueOf).map(String::strip).filter(value -> !value.isBlank())
+                .map(MusicMemoryConsolidator::tagSignal).forEach(result::add);
         return Set.copyOf(result);
+    }
+
+    private static SignalKey tagSignal(String raw) {
+        int separator = raw.indexOf(':');
+        if (separator <= 0) return new SignalKey(MusicPreferenceType.TAG, raw);
+        try {
+            MusicPreferenceType type = MusicPreferenceType.valueOf(raw.substring(0, separator).toUpperCase());
+            if (type == MusicPreferenceType.GENRE || type == MusicPreferenceType.LANGUAGE
+                    || type == MusicPreferenceType.MOOD || type == MusicPreferenceType.SCENE
+                    || type == MusicPreferenceType.TAG) {
+                return new SignalKey(type, raw.substring(separator + 1).strip());
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Unknown prefixes remain ordinary auditable tags.
+        }
+        return new SignalKey(MusicPreferenceType.TAG, raw);
     }
 
     private record SignalKey(MusicPreferenceType type, String value) {

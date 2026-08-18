@@ -86,7 +86,11 @@ public class ConversationServiceImpl implements ConversationService {
         List<AgentActionBo> displayActions = actions.stream()
                 .filter(action -> action.type() == AgentActionType.SHOW_MUSIC_RESULTS
                         || action.type() == AgentActionType.SHOW_QQ_PLAYLIST_RESULTS
-                        || action.type() == AgentActionType.SHOW_QQ_ARTIST_RESULTS)
+                        || action.type() == AgentActionType.SHOW_QQ_ARTIST_RESULTS
+                        || action.type() == AgentActionType.SHOW_QQ_CHART_RESULTS
+                        || action.type() == AgentActionType.SHOW_MUSIC_PROFILE_STORY
+                        || action.type() == AgentActionType.SHOW_PROACTIVE_SUGGESTIONS
+                        || action.type() == AgentActionType.SHOW_WORKFLOW_PROGRESS)
                 .toList();
         if (displayActions.isEmpty()) return null;
         try {

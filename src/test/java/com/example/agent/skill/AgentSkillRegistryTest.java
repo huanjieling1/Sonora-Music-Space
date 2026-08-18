@@ -13,6 +13,7 @@ class AgentSkillRegistryTest {
             "recommendMusic",
             "searchQqPlaylists",
             "searchQqArtists",
+            "queryQqMusicTrends",
             "playRandomQqPublicPlaylist",
             "playRecommendedTrack",
             "queueLatestRecommendations",
@@ -24,8 +25,10 @@ class AgentSkillRegistryTest {
 
         assertThat(registry.skills()).extracting(AgentSkillDefinition::id)
                 .containsExactly(
+                        "qq-music-trends",
                         "qq-artist-discovery",
                         "qq-public-playlists",
+                        "recommendation-follow-up",
                         "music-discovery",
                         "music-playback",
                         "music-profile-insight");
@@ -43,10 +46,13 @@ class AgentSkillRegistryTest {
                 .startsWith("Base role")
                 .contains("# 当前可用 Skill 目录")
                 .contains("## Skill：music-discovery")
+                .contains("## Skill：recommendation-follow-up")
+                .contains("先记录反馈与偏好，再调用一次 `recommendMusic`")
                 .contains("名称：音乐发现")
                 .contains("允许工具：recommendMusic, loadMusicResultsPage")
                 .contains("允许工具：searchQqPlaylists, playRandomQqPublicPlaylist")
                 .contains("允许工具：searchQqArtists")
+                .contains("允许工具：queryQqMusicTrends")
                 .contains("不得凭常识、封面或歌曲名虚构奖项")
                 .contains("## Skill：music-profile-insight")
                 .contains("不得推荐或虚构歌曲");
@@ -56,11 +62,23 @@ class AgentSkillRegistryTest {
     void rejectsUnknownToolsAndUncoveredRegisteredTools() {
         AgentSkillDefinition invalid = new AgentSkillDefinition(
                 "invalid-skill", "invalid-skill", "Invalid test skill", 1,
-                Set.of("missingTool"), "Do nothing.", "test");
+                Set.of("missingTool"), Set.of("invalid"), "Do nothing.", "test");
 
         assertThatThrownBy(() -> new AgentSkillRegistry(java.util.List.of(invalid), Set.of("realTool")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("unknown tools");
+    }
+
+    @Test
+    void acceptsNewVerifiedSkillWithoutEditingACentralCapabilityCatalog() {
+        AgentSkillDefinition added = new AgentSkillDefinition(
+                "weather", "天气查询", "查询实时天气", 1, Set.of("getWeather"),
+                Set.of("天气", "气温"), "调用真实天气工具。", "test");
+
+        AgentSkillRegistry registry = new AgentSkillRegistry(java.util.List.of(added), Set.of("getWeather"));
+
+        assertThat(registry.skills()).containsExactly(added);
+        assertThat(registry.coveredToolNames()).containsExactly("getWeather");
     }
 
     @Test
