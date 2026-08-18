@@ -50,14 +50,25 @@ public class MusicPersonalizationRepository {
     public void recordExposure(long userId, UUID conversationId, UUID exposureId,
                                String description, Object plan, String policyVersion,
                                MusicPersonalizationStatus status, List<ExposureTrack> tracks) {
+        String fingerprint = MusicTrackIdentity.sha256(MusicTextNormalizer.normalize(description));
+        recordExposure(userId, conversationId, exposureId, description, plan, policyVersion, status,
+                fingerprint, nextBatchSequence(userId, conversationId, fingerprint), "STANDARD", tracks);
+    }
+
+    @Transactional
+    public void recordExposure(long userId, UUID conversationId, UUID exposureId,
+                               String description, Object plan, String policyVersion,
+                               MusicPersonalizationStatus status, String requestFingerprint,
+                               int batchSequence, String refreshSource, List<ExposureTrack> tracks) {
         requireOwnedConversation(userId, conversationId);
         jdbc.update("""
                 INSERT INTO music_recommendation_exposure
                     (id, user_id, conversation_id, description, plan_json, policy_version,
-                     personalization_status)
-                VALUES (?, ?, ?, ?, CAST(? AS JSON), ?, ?)
+                     personalization_status, request_fingerprint, batch_sequence, refresh_source)
+                VALUES (?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?)
                 """, exposureId.toString(), userId, conversationId.toString(), description,
-                json(plan), policyVersion, status.name());
+                json(plan), policyVersion, status.name(), requestFingerprint,
+                Math.max(1, batchSequence), truncate(refreshSource, 24));
 
         int position = 0;
         for (ExposureTrack item : tracks) {
@@ -78,6 +89,9 @@ public class MusicPersonalizationRepository {
                         last_seen_at = CURRENT_TIMESTAMP(6)
                     """, trackKey, track.provider(), track.id(), track.name(), primaryArtist(track), track.album(),
                     contentText, contentHash, json(track));
+            upsertExposureTags(trackKey, item);
+            Map<String, Object> featureSnapshot = new LinkedHashMap<>(item.features());
+            featureSnapshot.put("tags", item.tags());
             jdbc.update("""
                     INSERT INTO music_recommendation_item
                         (exposure_id, track_key, provider, provider_track_id, display_position,
@@ -85,7 +99,7 @@ public class MusicPersonalizationRepository {
                     VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), CAST(? AS JSON), ?,
                             CAST(? AS JSON), ?)
                     """, exposureId.toString(), trackKey, track.provider(), track.id(), position,
-                    json(track), json(item.sourceRanks()), json(item.features()), item.finalScore(),
+                    json(track), json(item.sourceRanks()), json(featureSnapshot), item.finalScore(),
                     json(item.reasonCodes()), item.exploration());
             boolean graphStale = previous == null || !contentHash.equals(previous.graphProjectedHash());
             boolean embeddingStale = embeddings.configured()
@@ -99,6 +113,39 @@ public class MusicPersonalizationRepository {
                         "contentHash", contentHash));
             }
         }
+    }
+
+    public int nextBatchSequence(long userId, UUID conversationId, String requestFingerprint) {
+        Integer value = jdbc.queryForObject("""
+                SELECT COALESCE(MAX(batch_sequence), 0) + 1
+                  FROM music_recommendation_exposure
+                 WHERE user_id = ? AND conversation_id = ? AND request_fingerprint = ?
+                """, Integer.class, userId, conversationId.toString(), requestFingerprint);
+        return value == null ? 1 : Math.max(1, value);
+    }
+
+    public List<RecentExposureTrack> recentExposureTracks(long userId, UUID conversationId, int batchLimit) {
+        if (conversationId == null || batchLimit <= 0) return List.of();
+        List<String> exposureIds = jdbc.query("""
+                SELECT id FROM music_recommendation_exposure
+                 WHERE user_id = ? AND conversation_id = ?
+                   AND created_at >= CURRENT_TIMESTAMP(6) - INTERVAL 24 HOUR
+                 ORDER BY created_at DESC
+                 LIMIT ?
+                """, (rs, row) -> rs.getString("id"), userId, conversationId.toString(), batchLimit);
+        if (exposureIds.isEmpty()) return List.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(exposureIds.size(), "?"));
+        String sql = """
+                SELECT e.id AS exposure_id, i.track_key, c.title, c.primary_artist
+                  FROM music_recommendation_item i
+                  JOIN music_recommendation_exposure e ON e.id = i.exposure_id
+                  JOIN music_catalog_track c ON c.track_key = i.track_key
+                 WHERE i.exposure_id IN (%s)
+                 ORDER BY e.created_at DESC, i.display_position
+                """.formatted(placeholders);
+        return jdbc.query(sql, (rs, row) -> new RecentExposureTrack(
+                rs.getString("exposure_id"), rs.getString("track_key"),
+                rs.getString("title"), rs.getString("primary_artist")), exposureIds.toArray());
     }
 
     public Optional<ExposureItem> findOwnedExposureItem(long userId, UUID exposureId, String trackId) {
@@ -130,17 +177,30 @@ public class MusicPersonalizationRepository {
     }
 
     @Transactional
-    public EventWriteResult recordEvent(long userId, UUID eventId, UUID exposureId,
-                                        ExposureItem item, MusicBehaviorEventType type, Long playbackMs) {
+    public EventWriteResult recordEvent(long userId, UUID eventId, UUID playbackSessionId, UUID exposureId,
+                                        ExposureItem item, MusicBehaviorEventType type,
+                                        Long playbackMs, Long listenedMs) {
+        if (type == MusicBehaviorEventType.PROGRESS) {
+            recordPlaybackProgress(userId, playbackSessionId, item, type, playbackMs, listenedMs);
+            return new EventWriteResult(false);
+        }
+        String sessionEventKey = playbackSessionId == null || !isPlaybackLifecycle(type)
+                ? null : playbackSessionId + ":" + type.name();
         try {
             jdbc.update("""
                     INSERT INTO music_behavior_event
-                        (event_id, user_id, exposure_id, recommendation_item_id, event_type, playback_ms, reward)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, eventId.toString(), userId, exposureId.toString(), item.id(), type.name(),
-                    playbackMs, type.reward());
+                        (event_id, playback_session_id, session_event_key, user_id, exposure_id,
+                         recommendation_item_id, event_type, playback_ms, listened_ms, reward)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, eventId.toString(), playbackSessionId == null ? null : playbackSessionId.toString(),
+                    sessionEventKey, userId, exposureId.toString(), item.id(), type.name(), playbackMs,
+                    listenedMs, type.reward());
         } catch (DuplicateKeyException duplicate) {
             return new EventWriteResult(true);
+        }
+
+        if (isPlaybackLifecycle(type)) {
+            recordPlaybackProgress(userId, playbackSessionId, item, type, playbackMs, listenedMs);
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -157,6 +217,53 @@ public class MusicPersonalizationRepository {
             updateExplicitTrackPreference(userId, item, type);
         }
         return new EventWriteResult(false);
+    }
+
+    private void recordPlaybackProgress(long userId, UUID playbackSessionId, ExposureItem item,
+                                        MusicBehaviorEventType type, Long playbackMs, Long listenedMs) {
+        if (playbackSessionId == null) return;
+        long observedMs = Math.max(0, playbackMs == null ? 0 : playbackMs);
+        int created = jdbc.update("""
+                INSERT IGNORE INTO music_playback_session
+                    (id, user_id, track_key, max_playback_ms, listened_ms, completed)
+                VALUES (?, ?, ?, 0, 0, 0)
+                """, playbackSessionId.toString(), userId, item.trackKey());
+        Long previousListened = jdbc.queryForObject("""
+                SELECT listened_ms FROM music_playback_session
+                 WHERE id = ? AND user_id = ?
+                """, Long.class, playbackSessionId.toString(), userId);
+        long observedListenedMs = Math.max(0, listenedMs == null ? observedMs : listenedMs);
+        long delta = Math.max(0, observedListenedMs - (previousListened == null ? 0 : previousListened));
+        int completed = type == MusicBehaviorEventType.COMPLETE ? 1 : 0;
+        jdbc.update("""
+                UPDATE music_playback_session
+                   SET max_playback_ms = GREATEST(max_playback_ms, ?),
+                       listened_ms = GREATEST(listened_ms, ?),
+                       completed = GREATEST(completed, ?), last_event_at = CURRENT_TIMESTAMP(6)
+                 WHERE id = ? AND user_id = ?
+                """, observedMs, observedListenedMs, completed, playbackSessionId.toString(), userId);
+        jdbc.update("""
+                INSERT INTO music_user_track_stat
+                    (user_id, track_key, play_count, complete_count, skip_count, repeat_count,
+                     total_playback_ms, first_played_at, last_played_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+                ON DUPLICATE KEY UPDATE
+                    play_count = play_count + VALUES(play_count),
+                    complete_count = complete_count + VALUES(complete_count),
+                    skip_count = skip_count + VALUES(skip_count),
+                    repeat_count = repeat_count + VALUES(repeat_count),
+                    total_playback_ms = total_playback_ms + VALUES(total_playback_ms),
+                    last_played_at = CURRENT_TIMESTAMP(6)
+                """, userId, item.trackKey(), created > 0 ? 1 : 0,
+                type == MusicBehaviorEventType.COMPLETE ? 1 : 0,
+                type == MusicBehaviorEventType.SKIP ? 1 : 0,
+                type == MusicBehaviorEventType.REPEAT ? 1 : 0, delta);
+    }
+
+    private static boolean isPlaybackLifecycle(MusicBehaviorEventType type) {
+        return type == MusicBehaviorEventType.PLAY_START || type == MusicBehaviorEventType.COMPLETE
+                || type == MusicBehaviorEventType.SKIP || type == MusicBehaviorEventType.REPEAT
+                || type == MusicBehaviorEventType.PROGRESS;
     }
 
     @Transactional
@@ -235,6 +342,145 @@ public class MusicPersonalizationRepository {
                 SELECT COUNT(*) FROM music_recommendation_exposure WHERE user_id = ?
                 """, Integer.class, userId);
         return new ProfileStats(labeled == null ? 0 : labeled, exposures == null ? 0 : exposures);
+    }
+
+    public ListeningTotals listeningTotals(long userId) {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) AS unique_tracks,
+                       COALESCE(SUM(play_count), 0) AS plays,
+                       COALESCE(SUM(complete_count), 0) AS completes,
+                       COALESCE(SUM(skip_count), 0) AS skips,
+                       COALESCE(SUM(repeat_count), 0) AS repeats,
+                       COALESCE(SUM(total_playback_ms), 0) AS playback_ms,
+                       MIN(first_played_at) AS first_played_at,
+                       MAX(last_played_at) AS last_played_at
+                  FROM music_user_track_stat WHERE user_id = ?
+                """, (rs, row) -> new ListeningTotals(rs.getLong("unique_tracks"), rs.getLong("plays"),
+                rs.getLong("completes"), rs.getLong("skips"), rs.getLong("repeats"),
+                rs.getLong("playback_ms"), timestamp(rs.getTimestamp("first_played_at")),
+                timestamp(rs.getTimestamp("last_played_at"))), userId);
+    }
+
+    public List<TrackStatRow> topTracks(long userId, int limit) {
+        return jdbc.query("""
+                SELECT c.track_key, c.provider, c.provider_track_id, c.title, c.primary_artist, c.album,
+                       s.play_count, s.complete_count, s.skip_count, s.repeat_count,
+                       s.total_playback_ms, s.last_played_at
+                  FROM music_user_track_stat s
+                  JOIN music_catalog_track c ON c.track_key = s.track_key
+                 WHERE s.user_id = ?
+                 ORDER BY s.play_count DESC, s.total_playback_ms DESC, s.last_played_at DESC
+                 LIMIT ?
+                """, (rs, row) -> new TrackStatRow(rs.getString("track_key"), rs.getString("provider"),
+                rs.getString("provider_track_id"), rs.getString("title"), rs.getString("primary_artist"),
+                rs.getString("album"), rs.getLong("play_count"), rs.getLong("complete_count"),
+                rs.getLong("skip_count"), rs.getLong("repeat_count"), rs.getLong("total_playback_ms"),
+                timestamp(rs.getTimestamp("last_played_at"))), userId, Math.max(1, Math.min(limit, 20)));
+    }
+
+    public List<ArtistStatRow> topArtists(long userId, int limit) {
+        return jdbc.query("""
+                SELECT c.primary_artist,
+                       COUNT(*) AS unique_tracks,
+                       SUM(s.play_count) AS plays,
+                       SUM(s.complete_count) AS completes,
+                       SUM(s.repeat_count) AS repeats,
+                       SUM(s.total_playback_ms) AS playback_ms,
+                       MAX(s.last_played_at) AS last_played_at
+                  FROM music_user_track_stat s
+                  JOIN music_catalog_track c ON c.track_key = s.track_key
+                 WHERE s.user_id = ? AND c.primary_artist IS NOT NULL AND c.primary_artist <> ''
+                 GROUP BY c.primary_artist
+                 ORDER BY plays DESC, playback_ms DESC, last_played_at DESC
+                 LIMIT ?
+                """, (rs, row) -> new ArtistStatRow(rs.getString("primary_artist"),
+                rs.getLong("unique_tracks"), rs.getLong("plays"), rs.getLong("completes"),
+                rs.getLong("repeats"), rs.getLong("playback_ms"),
+                timestamp(rs.getTimestamp("last_played_at"))), userId, Math.max(1, Math.min(limit, 20)));
+    }
+
+    public List<TagStatRow> topTags(long userId, int limit) {
+        return jdbc.query("""
+                SELECT t.tag_type, t.tag_value, COUNT(DISTINCT s.track_key) AS unique_tracks,
+                       SUM(s.play_count) AS plays,
+                       SUM(s.total_playback_ms) AS playback_ms,
+                       SUM(GREATEST(0, s.play_count + s.complete_count * 2 + s.repeat_count * 3
+                                      - s.skip_count) * t.confidence) AS affinity,
+                       MAX(t.confidence) AS confidence
+                  FROM music_user_track_stat s
+                  JOIN (
+                        SELECT track_key, tag_type, normalized_value,
+                               MAX(tag_value) AS tag_value, MAX(confidence) AS confidence
+                          FROM music_track_tag
+                         GROUP BY track_key, tag_type, normalized_value
+                       ) t ON t.track_key = s.track_key
+                 WHERE s.user_id = ?
+                 GROUP BY t.tag_type, t.normalized_value, t.tag_value
+                 HAVING unique_tracks > 0
+                 ORDER BY affinity DESC, plays DESC, playback_ms DESC
+                 LIMIT ?
+                """, (rs, row) -> new TagStatRow(rs.getString("tag_type"), rs.getString("tag_value"),
+                rs.getLong("unique_tracks"), rs.getLong("plays"), rs.getLong("playback_ms"),
+                rs.getDouble("affinity"), rs.getDouble("confidence")), userId,
+                Math.max(1, Math.min(limit, 30)));
+    }
+
+    public boolean shouldEnrichTrack(String trackKey, String source, int refreshDays) {
+        Integer fresh = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM music_track_enrichment
+                 WHERE track_key = ? AND source = ?
+                   AND ((status IN ('SUCCESS', 'EMPTY')
+                         AND checked_at >= CURRENT_TIMESTAMP(6) - INTERVAL ? DAY)
+                        OR (status = 'FAILED'
+                            AND checked_at >= CURRENT_TIMESTAMP(6) - INTERVAL 1 DAY))
+                """, Integer.class, trackKey, source, Math.max(1, refreshDays));
+        return fresh == null || fresh == 0;
+    }
+
+    @Transactional
+    public void saveTrackEnrichment(String trackKey, String source, String sourceKey,
+                                    String status, String errorMessage, List<TrackTagRow> tags) {
+        for (TrackTagRow tag : tags == null ? List.<TrackTagRow>of() : tags) {
+            upsertTrackTag(trackKey, tag.type(), tag.value(), source, tag.confidence());
+        }
+        jdbc.update("""
+                INSERT INTO music_track_enrichment
+                    (track_key, source, source_key, status, checked_at, error_message)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(6), ?)
+                ON DUPLICATE KEY UPDATE source_key = VALUES(source_key), status = VALUES(status),
+                    checked_at = CURRENT_TIMESTAMP(6), error_message = VALUES(error_message)
+                """, trackKey, source, sourceKey, status,
+                errorMessage == null ? null : truncate(errorMessage, 500));
+    }
+
+    private void upsertExposureTags(String trackKey, ExposureTrack item) {
+        String source = item.reasonCodes().contains("QQ_ALBUM_PAGE") ? "qq_album"
+                : item.reasonCodes().contains("QQ_PUBLIC_PLAYLIST") ? "qq_playlist" : "recommendation";
+        double confidence = "qq_album".equals(source) ? 0.92 : "qq_playlist".equals(source) ? 0.58 : 0.50;
+        for (String raw : item.tags()) {
+            if (raw == null || raw.isBlank()) continue;
+            int separator = raw.indexOf(':');
+            String requestedType = separator > 0 ? raw.substring(0, separator).strip().toUpperCase() : "TAG";
+            boolean typed = List.of("GENRE", "LANGUAGE", "MOOD", "SCENE", "TAG").contains(requestedType);
+            String type = typed ? requestedType : "TAG";
+            String value = separator > 0 && typed
+                    ? raw.substring(separator + 1).strip() : raw.strip();
+            upsertTrackTag(trackKey, type, value, source, confidence);
+        }
+    }
+
+    private void upsertTrackTag(String trackKey, String type, String value, String source, double confidence) {
+        if (value == null || value.isBlank()) return;
+        String normalized = MusicTextNormalizer.normalize(value);
+        if (normalized.isBlank()) return;
+        jdbc.update("""
+                INSERT INTO music_track_tag
+                    (track_key, tag_type, tag_value, normalized_value, source, confidence)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE tag_value = VALUES(tag_value),
+                    confidence = GREATEST(confidence, VALUES(confidence)), updated_at = CURRENT_TIMESTAMP(6)
+                """, trackKey, truncate(type.toUpperCase(), 24), truncate(value.strip(), 120),
+                truncate(normalized, 120), truncate(source, 32), Math.max(0, Math.min(1, confidence)));
     }
 
     public List<String> recentContextRejections(long userId, UUID conversationId) {
@@ -578,6 +824,10 @@ public class MusicPersonalizationRepository {
         return track.artists() == null || track.artists().isEmpty() ? null : track.artists().get(0);
     }
 
+    private static LocalDateTime timestamp(Timestamp value) {
+        return value == null ? null : value.toLocalDateTime();
+    }
+
     private static String truncate(String value, int max) {
         String actual = value == null ? "unknown" : value;
         return actual.length() <= max ? actual : actual.substring(0, max);
@@ -599,6 +849,10 @@ public class MusicPersonalizationRepository {
                                UUID conversationId, String policyVersion) {
     }
 
+    public record RecentExposureTrack(String exposureId, String trackKey,
+                                      String title, String primaryArtist) {
+    }
+
     public record EventWriteResult(boolean duplicate) {
     }
 
@@ -609,6 +863,26 @@ public class MusicPersonalizationRepository {
     }
 
     public record ProfileStats(int labeledEvents, int exposures) {
+    }
+
+    public record ListeningTotals(long uniqueTracks, long plays, long completes, long skips, long repeats,
+                                  long playbackMs, LocalDateTime firstPlayedAt, LocalDateTime lastPlayedAt) {
+    }
+
+    public record TrackStatRow(String trackKey, String provider, String trackId, String title,
+                               String artist, String album, long plays, long completes, long skips,
+                               long repeats, long playbackMs, LocalDateTime lastPlayedAt) {
+    }
+
+    public record ArtistStatRow(String artist, long uniqueTracks, long plays, long completes,
+                                long repeats, long playbackMs, LocalDateTime lastPlayedAt) {
+    }
+
+    public record TagStatRow(String type, String value, long uniqueTracks, long plays,
+                             long playbackMs, double affinity, double confidence) {
+    }
+
+    public record TrackTagRow(String type, String value, double confidence) {
     }
 
     public record TrackSignal(int exposureCount, LocalDateTime lastExposedAt,

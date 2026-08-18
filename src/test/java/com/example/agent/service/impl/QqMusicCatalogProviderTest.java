@@ -33,6 +33,7 @@ class QqMusicCatalogProviderTest {
             assertThat(track.playbackUrl()).contains("/api/music/qq/play/0039MnYb0qxYhV")
                     .contains("mediaId=003Qui1q2u1Zho");
             assertThat(track.imageUrl()).contains("000MkMni19ClKG");
+            assertThat(track.albumId()).isEqualTo("000MkMni19ClKG");
             assertThat(track.durationMs()).isEqualTo(269000);
         });
     }

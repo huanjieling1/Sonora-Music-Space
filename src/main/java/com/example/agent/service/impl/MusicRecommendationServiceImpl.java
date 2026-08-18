@@ -3,6 +3,7 @@ package com.example.agent.service.impl;
 import com.example.agent.config.MusicCatalogProperties;
 import com.example.agent.exception.AppException;
 import com.example.agent.model.ao.MusicRecommendationAo;
+import com.example.agent.model.ao.PreparedMusicRecommendationAo;
 import com.example.agent.model.bo.MusicProviderStatusBo;
 import com.example.agent.model.bo.MusicPersonalizationStatus;
 import com.example.agent.model.bo.MusicMatchType;
@@ -12,10 +13,12 @@ import com.example.agent.model.bo.MusicSearchIntent;
 import com.example.agent.model.bo.MusicSearchPlan;
 import com.example.agent.model.bo.MusicSearchTask;
 import com.example.agent.model.bo.MusicSearchTaskType;
+import com.example.agent.model.bo.MusicSoftIntent;
 import com.example.agent.model.bo.MusicStatusBo;
 import com.example.agent.model.bo.MusicTrackBo;
 import com.example.agent.model.bo.MusicUnderstandingBo;
 import com.example.agent.model.bo.MusicToolName;
+import com.example.agent.model.bo.MusicToolCall;
 import com.example.agent.service.MusicCatalogProvider;
 import com.example.agent.service.MusicQueryPlanner;
 import com.example.agent.service.MusicRecommendationService;
@@ -25,11 +28,13 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
@@ -52,6 +57,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
     private final MusicCandidateRanker candidateRanker;
     private final MusicPersonalizedRanker personalizedRanker;
     private final MusicPersonalizationRepository personalizationRepository;
+    private final MusicRecommendationNoveltyPolicy noveltyPolicy;
     private final List<MusicCatalogProvider> providers;
     private final ExecutorService executor;
     private final int timeoutSeconds;
@@ -64,6 +70,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
                                           MusicCandidateRanker candidateRanker,
                                           MusicPersonalizedRanker personalizedRanker,
                                           MusicPersonalizationRepository personalizationRepository,
+                                          MusicRecommendationNoveltyPolicy noveltyPolicy,
                                           List<MusicCatalogProvider> providers,
                                           @Qualifier("musicProviderExecutor") ExecutorService executor,
                                           MusicCatalogProperties properties) {
@@ -74,6 +81,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
         this.candidateRanker = candidateRanker;
         this.personalizedRanker = personalizedRanker;
         this.personalizationRepository = personalizationRepository;
+        this.noveltyPolicy = noveltyPolicy;
         this.providers = providers.stream().sorted(Comparator.comparingInt(MusicCatalogProvider::order)).toList();
         this.executor = executor;
         this.timeoutSeconds = properties.resolvedTimeoutSeconds();
@@ -86,7 +94,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
                                    ExecutorService executor,
                                    MusicCatalogProperties properties) {
         this(queryPlanner, new MusicSearchPlanCompiler(), new MusicCandidateVerifier(), null,
-                candidateRanker, null, null, providers, executor, properties);
+                candidateRanker, null, null, null, providers, executor, properties);
     }
 
     MusicRecommendationServiceImpl(MusicQueryPlanner queryPlanner,
@@ -98,7 +106,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
                                    ExecutorService executor,
                                    MusicCatalogProperties properties) {
         this(queryPlanner, planCompiler, candidateVerifier, feedbackRepository, candidateRanker,
-                null, null, providers, executor, properties);
+                null, null, null, providers, executor, properties);
     }
 
     @Override
@@ -116,6 +124,16 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
 
     @Override
     public MusicRecommendationBo recommend(MusicRecommendationAo command) {
+        return recommendInternal(command, null);
+    }
+
+    @Override
+    public MusicRecommendationBo recommendPrepared(PreparedMusicRecommendationAo prepared) {
+        return recommendInternal(prepared.command(), prepared);
+    }
+
+    private MusicRecommendationBo recommendInternal(MusicRecommendationAo command,
+                                                     PreparedMusicRecommendationAo prepared) {
         UUID exposureId = UUID.randomUUID();
         List<MusicCatalogProvider> directProviders = providers.stream()
                 .filter(provider -> provider.configured() && !provider.fallbackOnly())
@@ -125,10 +143,15 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
                     "音乐曲库尚未配置，请导入 QQ 音乐登录态，或设置 Jamendo / Audius");
         }
 
-        MusicSearchPlan proposedPlan = queryPlanner.plan(command.description());
+        MusicSearchPlan proposedPlan = prepared != null && prepared.proposedPlan() != null
+                ? prepared.proposedPlan() : queryPlanner.plan(command.description());
         PlanContext planContext = applyUserCorrections(command,
                 planCompiler.compile(command.description(), proposedPlan));
-        MusicExecutionPlan executionPlan = planContext.executionPlan();
+        MusicExecutionPlan executionPlan = applyRecommendationProfile(
+                planContext.executionPlan(), prepared);
+        MusicRecommendationNoveltyPolicy.Context novelty = noveltyPolicy == null
+                ? MusicRecommendationNoveltyPolicy.Context.standard("legacy", command.page())
+                : noveltyPolicy.prepare(command, executionPlan);
         MusicUnderstandingBo understanding = planContext.understanding();
         MusicSearchPlan searchPlan = rankingPlan(executionPlan);
         MusicSearchTask primaryTask = executionPlan.tool(MusicToolName.QQ_DIRECT_SEARCH)
@@ -147,7 +170,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
                 : directProviders.stream().filter(provider -> !"qq".equals(provider.id())).toList();
 
         List<ProviderSearchResult> primaryResults = searchAll(
-                primaryProviders, List.of(primaryTask), command.page(), pageSize);
+                primaryProviders, List.of(primaryTask), novelty.retrievalPage(), pageSize);
         List<Candidate> directCandidates = candidateVerifier.verify(executionPlan, understanding,
                 candidates(primaryResults), false);
         List<MusicTrackBo> directTracks = candidateRanker.rank(searchPlan, directCandidates, candidatePoolSize);
@@ -161,7 +184,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
         int remaining = candidatePoolSize - tracks.size();
         if (remaining > 0 && !expansionTasks.isEmpty()) {
             List<ProviderSearchResult> expanded = searchAll(primaryProviders, expansionTasks,
-                    command.page(), Math.min(10, Math.max(remaining, 3)));
+                    novelty.retrievalPage(), Math.min(10, Math.max(remaining, 3)));
             allResults.addAll(expanded);
             List<Candidate> verifiedExpansions = candidateVerifier.verify(executionPlan, understanding,
                     candidates(expanded), true);
@@ -173,7 +196,8 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
             List<MusicSearchTask> supportTasks = executionPlan.tool(MusicToolName.OPEN_CATALOG_SEARCH)
                     .map(call -> call.tasks()).orElse(List.of(primaryTask));
             List<ProviderSearchResult> supporting = searchAll(supportingProviders,
-                    supportTasks.stream().limit(3).toList(), command.page(), Math.min(10, Math.max(remaining, 3)));
+                    supportTasks.stream().limit(3).toList(), novelty.retrievalPage(),
+                    Math.min(10, Math.max(remaining, 3)));
             allResults.addAll(supporting);
             List<Candidate> verifiedSupporting = candidateVerifier.verify(executionPlan, understanding,
                     candidates(supporting), true);
@@ -183,7 +207,7 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
         }
         if (remaining > 0 && !fallbackProviders.isEmpty()) {
             List<ProviderSearchResult> fallback = searchAll(fallbackProviders, List.of(primaryTask),
-                    command.page(), Math.min(10, Math.max(remaining, 3)));
+                    novelty.retrievalPage(), Math.min(10, Math.max(remaining, 3)));
             allResults.addAll(fallback);
             List<Candidate> verifiedFallback = candidateVerifier.verify(executionPlan, understanding,
                     candidates(fallback), true);
@@ -195,13 +219,17 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
             throw new AppException(HttpStatus.BAD_GATEWAY, "音乐曲库暂时无法访问，请稍后重试");
         }
 
-        List<MusicTrackBo> candidatePool = List.copyOf(tracks.values());
+        List<MusicTrackBo> rawCandidatePool = List.copyOf(tracks.values());
+        MusicRecommendationNoveltyPolicy.FilterResult noveltyFilter = noveltyPolicy == null
+                ? new MusicRecommendationNoveltyPolicy.FilterResult(rawCandidatePool, 0)
+                : noveltyPolicy.filter(novelty, rawCandidatePool);
+        List<MusicTrackBo> candidatePool = noveltyFilter.tracks();
         MusicPersonalizedRanker.RankingResult ranking;
         if (personalizedRanker != null) {
             Set<String> availableProviders = providers.stream().filter(MusicCatalogProvider::configured)
                     .map(MusicCatalogProvider::id).collect(java.util.stream.Collectors.toSet());
             ranking = personalizedRanker.rank(exposureId, command, executionPlan, candidatePool,
-                    availableProviders, pageSize);
+                    availableProviders, pageSize, novelty);
         } else {
             List<MusicTrackBo> legacy = candidatePool.stream().limit(pageSize).toList();
             ranking = new MusicPersonalizedRanker.RankingResult(legacy, List.of(), "baseline-v1",
@@ -215,17 +243,81 @@ public class MusicRecommendationServiceImpl implements MusicRecommendationServic
         String searchQuery = displayQuery(allResults, primaryQuery);
         String explanation = explanation(searchPlan, searchQuery, trackList,
                 usedProviders, verifiedCount, relatedCount);
+        if (prepared != null && StringUtils.hasText(prepared.rationale())) {
+            explanation = prepared.rationale() + " " + explanation;
+        }
         explanation += personalizationExplanation(ranking.status());
+        if (novelty.refresh()) {
+            explanation += " 本次换批已避开当前会话最近 " + novelty.recentBatchCount()
+                    + " 批展示过的歌曲。";
+            if (trackList.size() < pageSize) {
+                explanation += " 严格去重后只找到 " + trackList.size()
+                        + " 首新歌曲，因此没有用旧结果凑满。";
+            }
+        }
         boolean hasNext = command.page() < MusicRecommendationAo.MAX_PAGE && trackList.size() == pageSize;
         if (command.personalizedRequest() && personalizationRepository != null) {
             personalizationRepository.recordExposure(command.userId(), command.conversationId(), exposureId,
                     command.description(), executionPlan, ranking.policyVersion(), ranking.status(),
-                    ranking.exposureTracks());
+                    novelty.requestFingerprint(), novelty.batchSequence(),
+                    novelty.refresh() ? "REFRESH" : "STANDARD", ranking.exposureTracks());
         }
         return new MusicRecommendationBo(exposureId, command.description(), searchQuery, explanation,
                 understanding, usedProviders, trackList, verifiedCount, relatedCount,
                 command.page(), pageSize, hasNext, MusicRecommendationAo.MAX_PAGE,
                 ranking.policyVersion(), ranking.status());
+    }
+
+    private static MusicExecutionPlan applyRecommendationProfile(
+            MusicExecutionPlan plan, PreparedMusicRecommendationAo prepared) {
+        if (prepared == null || plan.intent() != MusicSearchIntent.DISCOVERY
+                || !hardConstraintsEmpty(plan) || !StringUtils.hasText(prepared.searchSeed())) {
+            return plan;
+        }
+
+        MusicSearchTask primary = new MusicSearchTask(MusicSearchTaskType.SCENE,
+                prepared.searchSeed(), null, null, null);
+        LinkedHashMap<String, MusicSearchTask> expansions = new LinkedHashMap<>();
+        plan.tool(MusicToolName.QQ_EXPANDED_SEARCH).stream().flatMap(call -> call.tasks().stream())
+                .forEach(task -> expansions.putIfAbsent(MusicTextNormalizer.normalize(task.query()), task));
+        prepared.preferredTerms().stream()
+                .map(term -> new MusicSearchTask(MusicSearchTaskType.KEYWORDS, term, null, null, null))
+                .forEach(task -> expansions.putIfAbsent(MusicTextNormalizer.normalize(task.query()), task));
+        List<MusicSearchTask> expanded = expansions.values().stream()
+                .filter(task -> !MusicTextNormalizer.normalize(task.query())
+                        .equals(MusicTextNormalizer.normalize(primary.query())))
+                .limit(3).toList();
+
+        List<MusicToolCall> calls = new ArrayList<>();
+        calls.add(new MusicToolCall("qq_direct", MusicToolName.QQ_DIRECT_SEARCH,
+                List.of(primary), List.of()));
+        if (!expanded.isEmpty()) {
+            calls.add(new MusicToolCall("qq_expand", MusicToolName.QQ_EXPANDED_SEARCH,
+                    expanded, List.of("qq_direct")));
+        }
+        List<MusicSearchTask> openTasks = new ArrayList<>();
+        openTasks.add(primary);
+        openTasks.addAll(expanded);
+        calls.add(new MusicToolCall("open_catalog", MusicToolName.OPEN_CATALOG_SEARCH,
+                openTasks.stream().limit(3).toList(),
+                List.of(expanded.isEmpty() ? "qq_direct" : "qq_expand")));
+        calls.add(new MusicToolCall("video_fallback", MusicToolName.VIDEO_FALLBACK_SEARCH,
+                List.of(primary), List.of("open_catalog")));
+
+        LinkedHashSet<String> avoids = new LinkedHashSet<>(plan.softIntent().avoid());
+        String normalizedRequest = MusicTextNormalizer.normalize(plan.description());
+        prepared.avoidedTerms().stream()
+                .filter(term -> !normalizedRequest.contains(MusicTextNormalizer.normalize(term)))
+                .forEach(avoids::add);
+        return new MusicExecutionPlan(plan.description(), plan.intent(), plan.hardConstraints(),
+                new MusicSoftIntent(plan.softIntent().goal(), List.copyOf(avoids)),
+                plan.hints(), calls, plan.confidence(), plan.clarificationQuestion());
+    }
+
+    private static boolean hardConstraintsEmpty(MusicExecutionPlan plan) {
+        return !StringUtils.hasText(plan.hardConstraints().track())
+                && plan.hardConstraints().artists().isEmpty()
+                && !StringUtils.hasText(plan.hardConstraints().album());
     }
 
     private List<ProviderSearchResult> searchAll(List<MusicCatalogProvider> selected,

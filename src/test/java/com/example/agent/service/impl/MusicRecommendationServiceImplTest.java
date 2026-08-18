@@ -3,6 +3,7 @@ package com.example.agent.service.impl;
 import com.example.agent.config.MusicCatalogProperties;
 import com.example.agent.exception.AppException;
 import com.example.agent.model.ao.MusicRecommendationAo;
+import com.example.agent.model.ao.PreparedMusicRecommendationAo;
 import com.example.agent.model.bo.MusicSearchIntent;
 import com.example.agent.model.bo.MusicSearchPlan;
 import com.example.agent.model.bo.MusicSearchTask;
@@ -28,6 +29,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.any;
+import org.mockito.ArgumentCaptor;
 
 class MusicRecommendationServiceImplTest {
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
@@ -227,6 +229,49 @@ class MusicRecommendationServiceImplTest {
         verify(qq).search(org.mockito.ArgumentMatchers.<MusicSearchTask>argThat(task ->
                 "Faded".equals(task.query())), org.mockito.ArgumentMatchers.eq(1),
                 org.mockito.ArgumentMatchers.eq(10));
+    }
+
+    @Test
+    void preparedRecommendationReusesPlanAndAppliesProfileOnlyAsSoftSearchSeed() {
+        MusicQueryPlanner planner = mock(MusicQueryPlanner.class);
+        MusicSearchPlan proposed = new MusicSearchPlan(MusicSearchIntent.DISCOVERY, null, List.of(), null,
+                List.of(), List.of(), List.of("夜晚学习"), List.of(), 0.9, null);
+        MusicCatalogProvider jamendo = provider("jamendo", false, 10);
+        when(jamendo.search(any(MusicSearchTask.class), anyInt(), anyInt()))
+                .thenReturn(List.of(track("jamendo:profile", "Quiet Night", "Artist", "jamendo", "audio")));
+        var prepared = new PreparedMusicRecommendationAo(
+                new MusicRecommendationAo("推荐适合夜晚学习的歌", 1), proposed,
+                "夜晚学习 独立摇滚", List.of("独立摇滚", "Mili"), List.of("重金属"),
+                "本轮场景优先，并结合画像。", "STABLE", true);
+
+        var result = service(planner, List.of(jamendo), 5).recommendPrepared(prepared);
+
+        ArgumentCaptor<MusicSearchTask> tasks = ArgumentCaptor.forClass(MusicSearchTask.class);
+        verify(jamendo).search(tasks.capture(), anyInt(), anyInt());
+        assertThat(tasks.getValue().query()).isEqualTo("夜晚学习 独立摇滚");
+        assertThat(result.description()).isEqualTo("推荐适合夜晚学习的歌");
+        assertThat(result.explanation()).contains("本轮场景优先，并结合画像");
+        verify(planner, never()).plan(any());
+    }
+
+    @Test
+    void preparedProfileCannotRewriteExactTrackConstraints() {
+        MusicQueryPlanner planner = mock(MusicQueryPlanner.class);
+        MusicSearchPlan proposed = new MusicSearchPlan(MusicSearchIntent.EXACT_TRACK, "晴天",
+                List.of("周杰伦"), null, List.of(), List.of(), List.of(), List.of(), 1.0, null);
+        MusicCatalogProvider qq = provider("qq", false, 1);
+        when(qq.search(any(MusicSearchTask.class), anyInt(), anyInt()))
+                .thenReturn(List.of(track("qq:sunny", "晴天", "周杰伦", "qq", "audio")));
+        var prepared = new PreparedMusicRecommendationAo(
+                new MusicRecommendationAo("播放周杰伦的晴天", 1), proposed,
+                "Mili 独立摇滚", List.of("Mili"), List.of("周杰伦"), "画像提示", "STABLE", true);
+
+        service(planner, List.of(qq), 5).recommendPrepared(prepared);
+
+        ArgumentCaptor<MusicSearchTask> tasks = ArgumentCaptor.forClass(MusicSearchTask.class);
+        verify(qq).search(tasks.capture(), anyInt(), anyInt());
+        assertThat(tasks.getValue().query()).isEqualTo("晴天 周杰伦");
+        verify(planner, never()).plan(any());
     }
 
     private MusicRecommendationServiceImpl service(MusicQueryPlanner planner,

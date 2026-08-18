@@ -9,9 +9,9 @@
         <relativePath/>
     </parent>
     <groupId>com.example</groupId>
-    <artifactId>langchain4j-agent</artifactId>
+    <artifactId>sonora-music-space</artifactId>
     <version>1.0.0-SNAPSHOT</version>
-    <name>langchain4j-agent</name>
+    <name>sonora-music-space</name>
     <properties>
         <java.version>17</java.version>
         <langchain4j.version>1.18.1</langchain4j.version>

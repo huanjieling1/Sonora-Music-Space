@@ -145,7 +145,24 @@ async function sendMessage() {
   input.value = ''
   sending.value = true
   messages.value.push({ role: 'USER', content: text, actions: [], error: false })
-  const pending = { role: 'ASSISTANT', content: '正在为你寻找合适的音乐...', actions: [], error: false }
+  const pending = {
+    role: 'ASSISTANT',
+    content: '正在理解你的目标并安排合适的音乐 Agent…',
+    actions: [{
+      type: 'SHOW_WORKFLOW_PROGRESS',
+      workflow: {
+        workflowId: `pending-${Date.now()}`,
+        goal: text.length > 48 ? `${text.slice(0, 48)}…` : text,
+        status: 'RUNNING',
+        tasks: [
+          { id: 'intent', title: '理解你的目标', assignedAgent: 'Intent Agent', status: 'RUNNING', attempts: 1, maxAttempts: 1, message: '' },
+          { id: 'plan', title: '制定并调度任务计划', assignedAgent: 'Supervisor', status: 'PENDING', attempts: 0, maxAttempts: 1, message: '' },
+          { id: 'verify', title: '执行并验收结果', assignedAgent: 'Evaluator', status: 'PENDING', attempts: 0, maxAttempts: 1, message: '' },
+        ],
+      },
+    }],
+    error: false,
+  }
   messages.value.push(pending)
   await scrollToBottom()
   try {
@@ -182,6 +199,13 @@ async function logout() {
 
 function useSuggestion(prompt) {
   input.value = prompt
+}
+
+async function runQuickPrompt(prompt) {
+  if (!prompt || sending.value) return
+  input.value = prompt
+  await nextTick()
+  await sendMessage()
 }
 
 async function scrollToBottom() {
@@ -241,6 +265,7 @@ async function scrollToBottom() {
             :error="message.error"
             :actions="message.actions || []"
             :conversation-id="activeId"
+            @quick-prompt="runQuickPrompt"
           />
         </template>
       </div>

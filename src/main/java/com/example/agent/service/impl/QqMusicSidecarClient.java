@@ -105,6 +105,24 @@ public class QqMusicSidecarClient {
                 .body(JsonNode.class);
     }
 
+    public JsonNode charts() {
+        return restClient.get().uri("/charts").retrieve().body(JsonNode.class);
+    }
+
+    public JsonNode chart(int chartId, String period, int offset, int limit) {
+        return restClient.get()
+                .uri(uri -> {
+                    var builder = uri.path("/chart")
+                            .queryParam("id", chartId)
+                            .queryParam("offset", offset)
+                            .queryParam("limit", limit);
+                    if (StringUtils.hasText(period)) builder.queryParam("period", period);
+                    return builder.build();
+                })
+                .retrieve()
+                .body(JsonNode.class);
+    }
+
     public JsonNode playlist(String playlistId, int limit) {
         return restClient.get()
                 .uri(uri -> uri.path("/playlist")

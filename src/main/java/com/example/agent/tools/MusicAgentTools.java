@@ -1,28 +1,37 @@
 package com.example.agent.tools;
 
+import com.example.agent.agent.contract.UserTasteContext;
 import com.example.agent.exception.AppException;
 import com.example.agent.model.ao.MusicRecommendationAo;
+import com.example.agent.model.ao.PreparedMusicRecommendationAo;
 import com.example.agent.model.bo.AgentActionBo;
 import com.example.agent.model.bo.MusicRecommendationBo;
 import com.example.agent.model.bo.MusicTrackBo;
 import com.example.agent.model.bo.QqPlaylistSearchResultBo;
 import com.example.agent.model.bo.QqArtistSearchResultBo;
 import com.example.agent.model.bo.QqMusicSearchType;
+import com.example.agent.model.bo.QqChartResultBo;
+import com.example.agent.model.bo.QqChartCatalogBo;
 import com.example.agent.service.MusicRecommendationService;
 import com.example.agent.service.MusicKeywordExtractor;
 import com.example.agent.service.MusicPersonalizationService;
 import com.example.agent.service.QqMusicService;
+import com.example.agent.service.QqMusicChartService;
 import com.example.agent.service.impl.MusicAgentSessionStore;
 import com.example.agent.service.impl.MusicRecommendationContextResolver;
 import com.example.agent.service.impl.QqArtistProfileSummarizer;
 import com.example.agent.model.vo.music.MusicProfileInsightVo;
 import com.example.agent.model.vo.music.MusicProfileSummaryVo;
+import com.example.agent.model.vo.music.MusicProfileVo;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.UUID;
@@ -37,6 +46,7 @@ public class MusicAgentTools {
     private final QqMusicService qqMusicService;
     private final MusicKeywordExtractor keywordExtractor;
     private final MusicRecommendationContextResolver recommendationContextResolver;
+    private final QqMusicChartService chartService;
 
     @Autowired
     public MusicAgentTools(MusicRecommendationService recommendationService,
@@ -45,7 +55,8 @@ public class MusicAgentTools {
                            AgentActionContext actionContext,
                            QqMusicService qqMusicService,
                            MusicKeywordExtractor keywordExtractor,
-                           MusicRecommendationContextResolver recommendationContextResolver) {
+                           MusicRecommendationContextResolver recommendationContextResolver,
+                           QqMusicChartService chartService) {
         this.recommendationService = recommendationService;
         this.personalizationService = personalizationService;
         this.sessionStore = sessionStore;
@@ -53,6 +64,7 @@ public class MusicAgentTools {
         this.qqMusicService = qqMusicService;
         this.keywordExtractor = keywordExtractor;
         this.recommendationContextResolver = recommendationContextResolver;
+        this.chartService = chartService;
     }
 
     public MusicAgentTools(MusicRecommendationService recommendationService,
@@ -63,7 +75,7 @@ public class MusicAgentTools {
                            MusicKeywordExtractor keywordExtractor) {
         this(recommendationService, personalizationService, sessionStore, actionContext,
                 qqMusicService, keywordExtractor,
-                new MusicRecommendationContextResolver(personalizationService));
+                new MusicRecommendationContextResolver(personalizationService), null);
     }
 
     public MusicAgentTools(MusicRecommendationService recommendationService,
@@ -72,7 +84,7 @@ public class MusicAgentTools {
                            AgentActionContext actionContext,
                            QqMusicService qqMusicService) {
         this(recommendationService, personalizationService, sessionStore, actionContext,
-                qqMusicService, null, new MusicRecommendationContextResolver(personalizationService));
+                qqMusicService, null, new MusicRecommendationContextResolver(personalizationService), null);
     }
 
     public MusicAgentTools(MusicRecommendationService recommendationService,
@@ -80,7 +92,7 @@ public class MusicAgentTools {
                            MusicAgentSessionStore sessionStore,
                            AgentActionContext actionContext) {
         this(recommendationService, personalizationService, sessionStore, actionContext, null, null,
-                new MusicRecommendationContextResolver(personalizationService));
+                new MusicRecommendationContextResolver(personalizationService), null);
     }
 
     @Tool("""
@@ -91,7 +103,7 @@ public class MusicAgentTools {
             """)
     public String summarizeMusicProfile() {
         try {
-            return profileSummary(personalizationService.profile(actionContext.memoryId().userId()).summary());
+            return profileSummary(personalizationService.profile(actionContext.memoryId().userId()));
         } catch (AppException exception) {
             return "读取音乐画像失败：" + exception.getMessage();
         } catch (RuntimeException exception) {
@@ -111,6 +123,21 @@ public class MusicAgentTools {
     public String recommendMusic(
             @P("The listener's original music wording with named entities copied verbatim; no query expansion")
             String description) {
+        return recommendMusic(description, null, false, false);
+    }
+
+    /** Coordinator-only entry: the supplied snapshot is the sole profile source for this turn. */
+    public String recommendMusic(String description, UserTasteContext tasteContext) {
+        return recommendMusic(description, tasteContext, true, false);
+    }
+
+    /** Coordinator-only entry with an explicit request to avoid tracks shown in recent batches. */
+    public String recommendMusic(String description, UserTasteContext tasteContext, boolean refreshBatch) {
+        return recommendMusic(description, tasteContext, true, refreshBatch);
+    }
+
+    private String recommendMusic(String description, UserTasteContext tasteContext,
+                                  boolean explicitProfileContext, boolean refreshBatch) {
         if (!StringUtils.hasText(description)) {
             return "Music search was not run because the request description is empty.";
         }
@@ -118,7 +145,8 @@ public class MusicAgentTools {
             var memoryId = actionContext.memoryId();
             MusicRecommendationBo recommendation = search(
                     new MusicRecommendationAo(memoryId.userId(), memoryId.conversationId(), description.trim(),
-                            1, MusicRecommendationAo.MAX_PAGE_SIZE));
+                            1, MusicRecommendationAo.MAX_PAGE_SIZE, refreshBatch), tasteContext,
+                    explicitProfileContext);
             sessionStore.put(actionContext.memoryId(), recommendation);
             actionContext.add(AgentActionBo.showMusic(recommendation));
             return summarize(recommendation);
@@ -225,8 +253,58 @@ public class MusicAgentTools {
     }
 
     @Tool("""
+            Read QQ Music official charts or Sonora trend aggregations derived from persisted official chart
+            observations. Use for hot, rising, new, regional or genre chart requests, recently popular artists,
+            and a named artist's chart-leading tracks over day/week/month/all-time windows. Never turn a trend
+            request into keyword search. Preserve the source type, requested window, actual coverage dates and
+            methodology; Sonora aggregate scores are not QQ Music official heat scores.
+            """)
+    public String queryQqMusicTrends(
+            @P("The listener's complete original chart or trend request") String request) {
+        if (!StringUtils.hasText(request)) return "未执行 QQ 音乐趋势查询：请求为空。";
+        if (chartService == null) return "QQ 音乐榜单趋势工具当前不可用。";
+        try {
+            String window = trendWindow(request);
+            String artistName = specificTrendArtist(request);
+            if (StringUtils.hasText(artistName) && qqMusicService != null) {
+                var memory = actionContext.memoryId();
+                var found = qqMusicService.search(memory.userId(), memory.conversationId(), artistName,
+                        QqMusicSearchType.ARTIST, 1, 5);
+                if (!found.artists().isEmpty()) {
+                    var artist = found.artists().get(0);
+                    var report = chartService.artistTopTracks(artist.mid(), artist.name(), window, 20);
+                    actionContext.add(AgentActionBo.showQqChart(QqChartResultBo.trend(report)));
+                    return report.tracks().isEmpty()
+                            ? "已核对 QQ 音乐榜单快照，但当前覆盖周期内没有找到“" + artist.name() + "”的上榜歌曲。"
+                            : "已根据 QQ 音乐官方榜单观察生成“" + artist.name() + "”的热门歌曲排行；"
+                            + coverageText(report.coverageStart(), report.coverageEnd())
+                            + "，聚合分数不是 QQ 官方热度分。";
+                }
+            }
+            if (request.matches("(?is).*(?:哪些|哪个|歌手|艺人|乐队).*(?:火|热|排行|榜).*$")) {
+                var report = chartService.trendingArtists(window, trendGroup(request), 20);
+                actionContext.add(AgentActionBo.showQqChart(QqChartResultBo.trend(report)));
+                return "已根据 QQ 音乐官方榜单观察生成近期热门歌手排行；"
+                        + coverageText(report.coverageStart(), report.coverageEnd())
+                        + "，聚合分数不是 QQ 官方热度分。";
+            }
+            QqChartCatalogBo.Chart selected = selectChart(chartService.catalog(), request);
+            if (selected == null) return "QQ 音乐当前没有返回与该条件匹配的官方榜单。";
+            var detail = chartService.chart(selected.id(), selected.period(), 0, 100);
+            actionContext.add(AgentActionBo.showQqChart(QqChartResultBo.official(detail)));
+            return "已读取 QQ 音乐官方“" + selected.name() + "”，榜单周期为 "
+                    + selected.period() + "，结果和来源信息已显示在卡片中。";
+        } catch (AppException exception) {
+            return "QQ 音乐榜单查询失败：" + exception.getMessage();
+        } catch (RuntimeException exception) {
+            return "QQ 音乐榜单查询暂时不可用，请稍后重试。";
+        }
+    }
+
+    @Tool("""
             Randomly choose a real public playlist created by a QQ Music user, load its real tracks, display the
-            playlist in Sonora, replace the visible queue with a shuffled order, and start playing the first track.
+            playlist in Sonora, replace the visible queue with a shuffled order, and start the first verified
+            playable track among a bounded set of candidates.
             Use this tool when the listener explicitly asks to randomly play QQ Music homepage, popular public
             playlists, another user's playlist, or says "随机播放 QQ 音乐歌单". Do not use it for a named track.
             """)
@@ -240,23 +318,77 @@ public class MusicAgentTools {
             var playlist = qqMusicService.publicPlaylist(memoryId.userId(), memoryId.conversationId(),
                     candidates.get(0).id(), 60, true);
             if (playlist.tracks().isEmpty()) return "选中的 QQ 音乐公开歌单暂时没有可播放歌曲。";
+            MusicTrackBo playableTrack = firstPlayableQqTrack(playlist.tracks());
+            List<MusicTrackBo> orderedTracks = prioritize(playlist.tracks(), playableTrack);
             MusicRecommendationBo recommendation = new MusicRecommendationBo(
                     playlist.searchId(), "随机播放 QQ 音乐公开歌单", playlist.name(),
                     "来自 QQ 音乐用户“" + playlist.creatorName() + "”创建的公开歌单“" + playlist.name() + "”。",
                     com.example.agent.model.bo.MusicUnderstandingBo.unresolved(), List.of("QQ 音乐"),
-                    playlist.tracks(), playlist.tracks().size(), 0, 1, playlist.tracks().size(),
+                    orderedTracks, orderedTracks.size(), 0, 1, orderedTracks.size(),
                     false, 1, playlist.policyVersion(), playlist.personalizationStatus());
             sessionStore.put(memoryId, recommendation);
             actionContext.add(AgentActionBo.showMusic(recommendation));
             actionContext.add(AgentActionBo.queueMusic(recommendation));
-            actionContext.add(AgentActionBo.playTrack(playlist.tracks().get(0)));
+            if (playableTrack == null) {
+                return "已随机选择 QQ 音乐公开歌单《" + playlist.name() + "》（创建者："
+                        + playlist.creatorName() + "），并加载 " + orderedTracks.size()
+                        + " 首歌曲到播放队列；当前账号在前 " + Math.min(5, orderedTracks.size())
+                        + " 首中未找到可播放曲目，队列已保留，可手动选择其他歌曲。";
+            }
+            actionContext.add(AgentActionBo.playTrack(playableTrack));
             return "已随机选择 QQ 音乐公开歌单《" + playlist.name() + "》（创建者："
-                    + playlist.creatorName() + "），并随机排列 " + playlist.tracks().size() + " 首歌曲开始播放。";
+                    + playlist.creatorName() + "），并随机排列 " + orderedTracks.size() + " 首歌曲，从《"
+                    + playableTrack.name() + "》开始播放。";
         } catch (AppException exception) {
             return "QQ 音乐公开歌单加载失败：" + exception.getMessage();
         } catch (RuntimeException exception) {
             return "QQ 音乐公开歌单暂时无法加载，请稍后重试。";
         }
+    }
+
+    private MusicTrackBo firstPlayableQqTrack(List<MusicTrackBo> tracks) {
+        int limit = Math.min(5, tracks.size());
+        for (int index = 0; index < limit; index++) {
+            MusicTrackBo track = tracks.get(index);
+            QqPlaybackIdentity identity = qqPlaybackIdentity(track);
+            if (identity == null) continue;
+            try {
+                qqMusicService.resolvePlayback(identity.songMid(), identity.mediaId());
+                return track;
+            } catch (AppException exception) {
+                if (exception.getStatus() != HttpStatus.NOT_FOUND) return null;
+            } catch (RuntimeException exception) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static QqPlaybackIdentity qqPlaybackIdentity(MusicTrackBo track) {
+        if (track == null || !StringUtils.hasText(track.id()) || !track.id().startsWith("qq:")) return null;
+        String songMid = track.id().substring(3);
+        if (!songMid.matches("[A-Za-z0-9]+")) return null;
+        String mediaId = null;
+        if (StringUtils.hasText(track.playbackUrl())) {
+            try {
+                mediaId = UriComponentsBuilder.fromUriString(track.playbackUrl()).build()
+                        .getQueryParams().getFirst("mediaId");
+            } catch (IllegalArgumentException ignored) {
+                mediaId = null;
+            }
+        }
+        return new QqPlaybackIdentity(songMid, mediaId);
+    }
+
+    private static List<MusicTrackBo> prioritize(List<MusicTrackBo> tracks, MusicTrackBo first) {
+        if (first == null || tracks.isEmpty() || first.equals(tracks.get(0))) return List.copyOf(tracks);
+        ArrayList<MusicTrackBo> ordered = new ArrayList<>(tracks.size());
+        ordered.add(first);
+        tracks.stream().filter(track -> !track.equals(first)).forEach(ordered::add);
+        return List.copyOf(ordered);
+    }
+
+    private record QqPlaybackIdentity(String songMid, String mediaId) {
     }
 
     @Tool("""
@@ -340,17 +472,34 @@ public class MusicAgentTools {
     }
 
     private MusicRecommendationBo search(MusicRecommendationAo command) {
+        return search(command, null, false);
+    }
+
+    private MusicRecommendationBo search(MusicRecommendationAo command, UserTasteContext tasteContext,
+                                         boolean explicitProfileContext) {
         if (qqMusicService == null || keywordExtractor == null) {
             return recommendationService.recommend(command);
         }
         MusicKeywordExtractor.ExtractedKeyword extracted = keywordExtractor.extract(command.description());
-        var context = recommendationContextResolver.resolve(
-                command.userId(), command.description(), extracted.intent(), extracted.keyword());
+        var context = explicitProfileContext
+                ? recommendationContextResolver.resolve(command.userId(), command.description(),
+                extracted.intent(), extracted.keyword(), tasteContext)
+                : recommendationContextResolver.resolve(command.userId(), command.description(),
+                extracted.intent(), extracted.keyword());
         if (context.recommendation()) {
-            MusicRecommendationBo recommendation = recommendationService.recommend(
-                    new MusicRecommendationAo(command.userId(), command.conversationId(),
-                            context.searchDescription(), command.page(), command.pageSize()));
-            return withRecommendationRationale(recommendation, context.rationale());
+            MusicRecommendationBo recommendation;
+            if (explicitProfileContext) {
+                recommendation = recommendationService.recommendPrepared(new PreparedMusicRecommendationAo(
+                        command, extracted.proposedPlan(), context.searchDescription(),
+                        context.preferredTerms(), context.avoidedTerms(), context.rationale(),
+                        context.profileStage(), context.profileApplied()));
+            } else {
+                recommendation = recommendationService.recommend(
+                        new MusicRecommendationAo(command.userId(), command.conversationId(),
+                                context.searchDescription(), command.page(), command.pageSize()));
+            }
+            return explicitProfileContext ? recommendation
+                    : withRecommendationRationale(recommendation, context.rationale());
         }
         var result = qqMusicService.search(command.userId(), command.conversationId(), extracted.keyword(),
                 com.example.agent.model.bo.QqMusicSearchType.TRACK, command.page(), command.pageSize());
@@ -426,6 +575,64 @@ public class MusicAgentTools {
         return StringUtils.hasText(candidate) ? candidate : description.strip();
     }
 
+    private static String trendWindow(String request) {
+        if (request.matches("(?is).*(?:全时间|历史|有史以来|all.?time).*$")) return "ALL_TIME";
+        if (request.matches("(?is).*(?:一个月|本月|近 ?30 ?天|month).*$")) return "MONTH";
+        if (request.matches("(?is).*(?:一周|本周|近 ?7 ?天|week).*$")) return "WEEK";
+        if (request.matches("(?is).*(?:今日|今天|最近几天|日榜|day).*$")) return "DAY";
+        return "RECENT";
+    }
+
+    private static String trendGroup(String request) {
+        for (String group : List.of("地区榜", "特色榜", "全球榜", "巅峰榜")) {
+            if (request.contains(group)) return group;
+        }
+        return null;
+    }
+
+    private static String specificTrendArtist(String request) {
+        String value = request.strip()
+                .replaceFirst("(?is)^(?:请|请你|帮我|给我|我想|想看|查看|查找|搜索|推荐|看看|看下|来点)\\s*", "")
+                .replaceAll("(?is)(?:最近几天|最近一周|近一周|本周|最近一个月|近一个月|本月|近期|最近|全时间|历史)", "")
+                .replaceFirst("(?is)(?:旗下|的)?\\s*(?:最火|最热门|热度最高|热门|上榜|排行靠前).*?(?:歌曲|歌|作品).*$", "")
+                .strip();
+        if (!StringUtils.hasText(value) || value.length() > 40
+                || value.matches("(?is).*(?:哪些|哪个|歌手|艺人|乐队|音乐|歌曲|排行榜|榜单).*$")) {
+            return null;
+        }
+        return value;
+    }
+
+    private static QqChartCatalogBo.Chart selectChart(QqChartCatalogBo catalog, String request) {
+        List<QqChartCatalogBo.Chart> charts = catalog == null ? List.of() : catalog.groups().stream()
+                .flatMap(group -> group.charts().stream()).toList();
+        String preferred = request.contains("飙升") ? "飙升榜"
+                : request.matches("(?is).*(?:新歌|最新).*$") ? "新歌榜"
+                : request.contains("流行指数") ? "流行指数榜"
+                : request.contains("说唱") ? "说唱榜"
+                : request.contains("电音") ? "电音榜"
+                : request.contains("动漫") ? "动漫音乐榜"
+                : request.contains("游戏") ? "游戏音乐榜"
+                : request.contains("影视") ? "影视金曲榜"
+                : request.contains("国风") ? "国风热歌榜"
+                : request.contains("欧美") ? "欧美榜"
+                : request.contains("韩国") || request.contains("韩语") ? "韩国榜"
+                : request.contains("日本") || request.contains("日语") ? "日本榜"
+                : request.contains("内地") ? "内地榜"
+                : request.contains("香港") ? "香港地区榜"
+                : request.contains("台湾") ? "台湾地区榜"
+                : "热歌榜";
+        return charts.stream().filter(chart -> chart.name().contains(preferred)
+                        || preferred.contains(chart.name()))
+                .findFirst().orElseGet(() -> charts.stream()
+                        .filter(chart -> chart.name().contains("热歌榜")).findFirst().orElse(null));
+    }
+
+    private static String coverageText(java.time.LocalDate start, java.time.LocalDate end) {
+        if (start == null || end == null) return "实际覆盖范围暂未确定";
+        return "实际覆盖 " + start + " 至 " + end;
+    }
+
     private static MusicRecommendationBo withRecommendationRationale(
             MusicRecommendationBo recommendation, String rationale) {
         if (!StringUtils.hasText(rationale)) return recommendation;
@@ -444,7 +651,8 @@ public class MusicAgentTools {
                 : String.join(" / ", track.artists());
     }
 
-    private static String profileSummary(MusicProfileSummaryVo summary) {
+    private static String profileSummary(MusicProfileVo profile) {
+        MusicProfileSummaryVo summary = profile == null ? null : profile.summary();
         if (summary == null) return "当前还没有可用的音乐画像摘要。";
         StringBuilder result = new StringBuilder()
                 .append("画像阶段：").append(summary.stageLabel())
@@ -453,6 +661,35 @@ public class MusicAgentTools {
                 .append(summary.overview());
         appendInsights(result, "\n\n喜欢与偏好", summary.likes());
         appendInsights(result, "\n\n避开与不喜欢", summary.avoids());
+        if (profile.analytics() != null) {
+            var analytics = profile.analytics();
+            result.append("\n\n收听统计")
+                    .append("\n- 有效播放：").append(analytics.playCount()).append(" 次")
+                    .append("\n- 听过歌曲：").append(analytics.uniqueTracks()).append(" 首")
+                    .append("\n- 完播率：").append(Math.round(analytics.completionRate() * 100)).append("%")
+                    .append("\n- 累计时长：").append(Math.round(analytics.totalPlaybackMs() / 60000.0)).append(" 分钟");
+            if (!analytics.topTracks().isEmpty()) {
+                var track = analytics.topTracks().get(0);
+                result.append("\n- 最常听歌曲：").append(track.title())
+                        .append(track.artist() == null ? "" : " — " + track.artist())
+                        .append("（").append(track.playCount()).append(" 次）");
+            }
+            if (!analytics.topArtists().isEmpty()) {
+                var artist = analytics.topArtists().get(0);
+                result.append("\n- 最常听歌手：").append(artist.name())
+                        .append("（").append(artist.playCount()).append(" 次）");
+            }
+            if (!analytics.labels().isEmpty()) {
+                result.append("\n\n用户标签");
+                for (var label : analytics.labels()) {
+                    result.append("\n- ").append(label.name()).append("：").append(label.basis());
+                }
+            } else if (!analytics.profileReady()) {
+                result.append("\n\n用户标签尚未生成：至少需要 ")
+                        .append(analytics.requiredPlayCount()).append(" 次有效播放和 ")
+                        .append(analytics.requiredUniqueTracks()).append(" 首不同歌曲。");
+            }
+        }
         if (!summary.observations().isEmpty()) {
             result.append("\n\n画像说明");
             for (String observation : summary.observations()) result.append("\n- ").append(observation);

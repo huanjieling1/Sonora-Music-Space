@@ -1,6 +1,6 @@
 spring:
   application:
-    name: langchain4j-agent
+    name: sonora-music-space
   config:
     import: optional:file:.env[.properties]
   datasource:
@@ -47,6 +47,20 @@ agent:
   timeout-seconds: ${AGENT_TIMEOUT_SECONDS:60}
   log-requests: ${AGENT_LOG_REQUESTS:false}
   log-responses: ${AGENT_LOG_RESPONSES:false}
+  multi-agent:
+    enabled: ${AGENT_MULTI_AGENT_ENABLED:true}
+    profile:
+      model-name: ${AGENT_PROFILE_MODEL:${AGENT_MODEL:glm-4-flash-250414}}
+      temperature: ${AGENT_PROFILE_TEMPERATURE:0.55}
+      max-tokens: ${AGENT_PROFILE_MAX_TOKENS:1600}
+    intent:
+      model-name: ${AGENT_INTENT_MODEL:${AGENT_MODEL:glm-4-flash-250414}}
+      temperature: 0.0
+      max-tokens: ${AGENT_INTENT_MAX_TOKENS:800}
+    conversation:
+      model-name: ${AGENT_CONVERSATION_MODEL:${AGENT_MODEL:glm-4-flash-250414}}
+      temperature: ${AGENT_CONVERSATION_TEMPERATURE:0.2}
+      max-tokens: ${AGENT_CONVERSATION_MAX_TOKENS:${AGENT_MAX_TOKENS:4096}}
 music:
   personalization:
     enabled: ${MUSIC_PERSONALIZATION_ENABLED:true}
@@ -111,4 +125,3 @@ logging:
   level:
     org.springframework.security: INFO
     dev.langchain4j: INFO
-

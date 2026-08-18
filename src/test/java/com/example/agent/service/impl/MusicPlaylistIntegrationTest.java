@@ -186,6 +186,10 @@ class MusicPlaylistIntegrationTest {
         jdbc.update("DELETE FROM music_playlist");
         jdbc.update("DELETE FROM music_graph_outbox");
         jdbc.update("DELETE FROM music_behavior_event");
+        jdbc.update("DELETE FROM music_playback_session");
+        jdbc.update("DELETE FROM music_user_track_stat");
+        jdbc.update("DELETE FROM music_track_enrichment");
+        jdbc.update("DELETE FROM music_track_tag");
         jdbc.update("DELETE FROM music_preference_memory");
         jdbc.update("DELETE FROM music_recommendation_item");
         jdbc.update("DELETE FROM music_recommendation_exposure");

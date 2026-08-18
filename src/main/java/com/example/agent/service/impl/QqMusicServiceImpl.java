@@ -368,7 +368,8 @@ public class QqMusicServiceImpl implements QqMusicService {
                 .pathSegment(songMid).queryParam("mediaId", mediaMid).build().encode().toUriString();
         return new MusicTrackBo("qq:" + songMid, name, artists, item.path("album").asText(""), imageUrl,
                 Math.max(0, item.path("durationMs").asLong()),
-                "https://y.qq.com/n/ryqq/songDetail/" + songMid, "qq", "audio", playbackUrl, null);
+                "https://y.qq.com/n/ryqq/songDetail/" + songMid, "qq", "audio", playbackUrl, null)
+                .withAlbumId(albumMid);
     }
 
     private List<QqMusicSearchBo.Artist> mapArtists(JsonNode node) {
@@ -559,7 +560,7 @@ public class QqMusicServiceImpl implements QqMusicService {
                     MusicTrackBo track = tracks.get(index);
                     exposureTracks.add(new MusicPersonalizationRepository.ExposureTrack(track,
                             Map.of("qqArtist", index + 1), Map.of("artistMid", artistMid),
-                            List.of("QQ_ARTIST_PAGE"), List.of(response.path("name").asText()),
+                            List.of("QQ_ARTIST_PAGE"), List.of(),
                             Math.max(0.01, 1.0 - index * 0.002), false));
                 }
                 personalization.recordExposure(userId, conversationId, exposureId,
@@ -613,6 +614,7 @@ public class QqMusicServiceImpl implements QqMusicService {
         return new MusicTrackBo("qq:" + songMid, name, artists, item.path("album").asText(""),
                 imageUrl, Math.max(0, item.path("durationMs").asLong()),
                 "https://y.qq.com/n/ryqq/songDetail/" + songMid, "qq", "audio", playbackUrl, null)
+                .withAlbumId(albumMid)
                 .withRecommendationReason(List.of("QQ_ARTIST_PAGE"), "来自 " + artistName + " 的歌手主页", false, 1.0);
     }
 
@@ -638,11 +640,18 @@ public class QqMusicServiceImpl implements QqMusicService {
             }
             UUID exposureId = tracks.isEmpty() ? null : UUID.randomUUID();
             if (exposureId != null && personalization != null) {
+                List<String> albumTags = new ArrayList<>();
+                if (StringUtils.hasText(response.path("genre").asText())) {
+                    albumTags.add("GENRE:" + response.path("genre").asText().trim());
+                }
+                if (StringUtils.hasText(response.path("language").asText())) {
+                    albumTags.add("LANGUAGE:" + response.path("language").asText().trim());
+                }
                 List<MusicPersonalizationRepository.ExposureTrack> exposureTracks = new ArrayList<>();
                 for (int index = 0; index < tracks.size(); index++) {
                     exposureTracks.add(new MusicPersonalizationRepository.ExposureTrack(tracks.get(index),
                             Map.of("qqAlbum", index + 1), Map.of("albumMid", albumMid),
-                            List.of("QQ_ALBUM_PAGE"), textList(response.path("artists")),
+                            List.of("QQ_ALBUM_PAGE"), albumTags,
                             Math.max(0.01, 1.0 - index * 0.002), false));
                 }
                 personalization.recordExposure(userId, conversationId, exposureId,
@@ -724,6 +733,7 @@ public class QqMusicServiceImpl implements QqMusicService {
         return new MusicTrackBo("qq:" + songMid, name, artists, item.path("album").asText(""),
                 imageUrl, Math.max(0, item.path("durationMs").asLong()),
                 "https://y.qq.com/n/ryqq/songDetail/" + songMid, "qq", "audio", playbackUrl, null)
+                .withAlbumId(albumMid)
                 .withRecommendationReason(List.of("QQ_PUBLIC_PLAYLIST"),
                         "来自“" + playlist.name() + "” · " + playlist.creatorName(), false, 1.0);
     }

@@ -23,6 +23,7 @@ agent:
   base-url: ""
   model-name: gpt-4o-mini
   temperature: 0.2
+  max-tokens: 4096
   memory-max-messages: 20
   timeout-seconds: 60
   log-requests: false

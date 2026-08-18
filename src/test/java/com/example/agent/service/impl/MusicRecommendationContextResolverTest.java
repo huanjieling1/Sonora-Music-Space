@@ -1,5 +1,6 @@
 package com.example.agent.service.impl;
 
+import com.example.agent.agent.contract.UserTasteContext;
 import com.example.agent.model.bo.MusicSearchIntent;
 import com.example.agent.model.vo.music.MusicProfileInsightVo;
 import com.example.agent.model.vo.music.MusicProfileSummaryVo;
@@ -69,6 +70,24 @@ class MusicRecommendationContextResolverTest {
         assertThat(context.searchDescription()).isEqualTo("热门音乐");
         assertThat(context.playlistKeywords()).isEmpty();
         assertThat(context.rationale()).contains("没有可靠画像", "热门内容", "冷启动推荐");
+    }
+
+    @Test
+    void suppliedWorkflowProfileIsUsedWithoutReadingTheRepositoryAgain() {
+        UserTasteContext context = new UserTasteContext("STABLE", "画像稳定", true,
+                100, 40, 3_600_000, 0.8,
+                List.of(new UserTasteContext.Signal("GENRE", "独立摇滚", "明确喜欢", 1.0, "like:rock")),
+                List.of(new UserTasteContext.Signal("GENRE", "重金属", "高跳过率", 0.8, "avoid:metal")),
+                List.of(), List.of(), List.of(), List.of(), List.of());
+
+        var result = resolver.resolve(7L, "推荐适合跑步的音乐", MusicSearchIntent.DISCOVERY,
+                "跑步", context);
+
+        assertThat(result.searchDescription()).isEqualTo("跑步 独立摇滚");
+        assertThat(result.preferredTerms()).containsExactly("独立摇滚");
+        assertThat(result.avoidedTerms()).containsExactly("重金属");
+        assertThat(result.rationale()).startsWith("优先满足你当前提出的“跑步”需求");
+        verifyNoInteractions(personalization);
     }
 
     private static MusicProfileVo profile(List<MusicProfileInsightVo> likes,

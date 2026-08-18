@@ -108,7 +108,7 @@ public class QqMusicCatalogProvider implements MusicCatalogProvider {
                     "audio",
                     playbackUrl,
                     null
-            ));
+            ).withAlbumId(albumMid));
         }
         return tracks;
     }

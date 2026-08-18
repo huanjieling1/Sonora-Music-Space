@@ -1,5 +1,6 @@
 package com.example.agent.service.impl;
 
+import com.example.agent.agent.contract.UserTasteContext;
 import com.example.agent.model.bo.MusicSearchIntent;
 import com.example.agent.model.vo.music.MusicProfileInsightVo;
 import com.example.agent.model.vo.music.MusicProfileVo;
@@ -69,7 +70,36 @@ public class MusicRecommendationContextResolver {
         String rationale = rationale(currentKeyword, likes, avoids, profile);
         String stage = profile == null || profile.summary() == null ? "EMPTY" : profile.summary().stage();
         return new RecommendationContext(true, !likes.isEmpty(), original, searchDescription,
-                playlistTerms.stream().limit(2).toList(), rationale, stage);
+                playlistTerms.stream().limit(2).toList(),
+                likes.stream().map(MusicProfileInsightVo::value).toList(),
+                avoids.stream().map(MusicProfileInsightVo::value).toList(), rationale, stage);
+    }
+
+    public RecommendationContext resolve(long userId, String request, MusicSearchIntent intent,
+                                         String extractedKeyword, UserTasteContext profile) {
+        String original = MusicTextNormalizer.cleanRequest(request);
+        MusicSearchIntent safeIntent = intent == null ? MusicSearchIntent.AMBIGUOUS : intent;
+        boolean recommendation = isRecommendation(original, safeIntent);
+        String currentKeyword = meaningfulKeyword(extractedKeyword);
+        if (!recommendation) return RecommendationContext.literal(original, currentKeyword);
+
+        List<RecommendationTerm> preferred = preferredTerms(profile);
+        List<RecommendationTerm> avoided = avoidedTerms(profile);
+        LinkedHashSet<String> searchTerms = new LinkedHashSet<>();
+        if (StringUtils.hasText(currentKeyword)) searchTerms.add(currentKeyword);
+        preferred.stream().map(RecommendationTerm::value).forEach(searchTerms::add);
+        String searchDescription = searchTerms.stream().limit(4)
+                .reduce((left, right) -> left + " " + right).orElse("热门音乐");
+        LinkedHashSet<String> playlistTerms = new LinkedHashSet<>();
+        if (StringUtils.hasText(currentKeyword)) playlistTerms.add(currentKeyword);
+        preferred.stream().map(RecommendationTerm::value).forEach(playlistTerms::add);
+        String stage = profile == null ? "EMPTY" : profile.stage();
+        boolean applied = !preferred.isEmpty() || !avoided.isEmpty();
+        return new RecommendationContext(true, applied, original, searchDescription,
+                playlistTerms.stream().limit(2).toList(),
+                preferred.stream().map(RecommendationTerm::value).toList(),
+                avoided.stream().map(RecommendationTerm::value).toList(),
+                rationale(currentKeyword, preferred, avoided, profile), stage);
     }
 
     private boolean isRecommendation(String request, MusicSearchIntent intent) {
@@ -147,22 +177,85 @@ public class MusicRecommendationContextResolver {
                 .reduce((left, right) -> left + "、" + right).orElse("");
     }
 
+    private static List<RecommendationTerm> preferredTerms(UserTasteContext profile) {
+        if (profile == null) return List.of();
+        LinkedHashSet<RecommendationTerm> result = new LinkedHashSet<>();
+        profile.likes().stream().filter(value -> value.confidence() >= 0.55)
+                .map(value -> new RecommendationTerm(label(value.type()), value.value())).forEach(result::add);
+        profile.topTags().stream().limit(3)
+                .map(value -> new RecommendationTerm("标签", value.name())).forEach(result::add);
+        profile.topArtists().stream().limit(2)
+                .map(value -> new RecommendationTerm("歌手", value.name())).forEach(result::add);
+        return result.stream().filter(value -> StringUtils.hasText(value.value())).limit(6).toList();
+    }
+
+    private static List<RecommendationTerm> avoidedTerms(UserTasteContext profile) {
+        if (profile == null) return List.of();
+        return profile.avoids().stream().filter(value -> value.confidence() >= 0.55)
+                .map(value -> new RecommendationTerm(label(value.type()), value.value()))
+                .filter(value -> StringUtils.hasText(value.value())).distinct().limit(4).toList();
+    }
+
+    private static String rationale(String currentKeyword, List<RecommendationTerm> preferred,
+                                    List<RecommendationTerm> avoided, UserTasteContext profile) {
+        StringBuilder result = new StringBuilder();
+        if (StringUtils.hasText(currentKeyword)) {
+            result.append("优先满足你当前提出的“").append(currentKeyword).append("”需求");
+        }
+        if (!preferred.isEmpty()) {
+            if (!result.isEmpty()) result.append("，并");
+            result.append("结合音乐画像中的偏好：").append(termLabels(preferred, 3));
+        } else {
+            if (!result.isEmpty()) result.append("；");
+            result.append(profile == null || !profile.hasEvidence()
+                    ? "当前还没有可靠画像，先使用热门内容进行冷启动推荐"
+                    : "当前画像证据仍较少，先使用探索性推荐");
+        }
+        if (!avoided.isEmpty()) result.append("；同时避开：").append(termLabels(avoided, 2));
+        return result.append("。").toString();
+    }
+
+    private static String termLabels(List<RecommendationTerm> values, int limit) {
+        return values.stream().limit(limit).map(value -> value.label() + "“" + value.value() + "”")
+                .reduce((left, right) -> left + "、" + right).orElse("");
+    }
+
+    private static String label(String type) {
+        if (type == null) return "偏好";
+        return switch (type.toUpperCase(Locale.ROOT)) {
+            case "ARTIST" -> "歌手";
+            case "GENRE" -> "曲风";
+            case "LANGUAGE" -> "语种";
+            case "MOOD" -> "情绪";
+            case "SCENE" -> "场景";
+            default -> "偏好";
+        };
+    }
+
     public record RecommendationContext(
             boolean recommendation,
             boolean profileApplied,
             String originalRequest,
             String searchDescription,
             List<String> playlistKeywords,
+            List<String> preferredTerms,
+            List<String> avoidedTerms,
             String rationale,
             String profileStage
     ) {
         public RecommendationContext {
             playlistKeywords = playlistKeywords == null ? List.of() : List.copyOf(playlistKeywords);
+            preferredTerms = preferredTerms == null ? List.of() : List.copyOf(preferredTerms);
+            avoidedTerms = avoidedTerms == null ? List.of() : List.copyOf(avoidedTerms);
         }
 
         private static RecommendationContext literal(String request, String keyword) {
             return new RecommendationContext(false, false, request, request,
-                    StringUtils.hasText(keyword) ? List.of(keyword) : List.of(), "", "NOT_USED");
+                    StringUtils.hasText(keyword) ? List.of(keyword) : List.of(),
+                    List.of(), List.of(), "", "NOT_USED");
         }
+    }
+
+    private record RecommendationTerm(String label, String value) {
     }
 }

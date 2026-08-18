@@ -4,6 +4,7 @@ import {
   createPlaybackSession,
   finishPlayback,
   observePlayback,
+  seekPlayback,
   startPlayback,
 } from './musicPlaybackTracker.js'
 
@@ -37,3 +38,22 @@ for (const playbackType of ['audio', 'youtube']) {
     assert.deepEqual(repeated.event, { type: 'REPEAT', playbackMs: 120000 })
   })
 }
+
+test('seeking does not count skipped timeline as listening time', () => {
+  const track = { id: 'audio:seek', playbackType: 'audio' }
+  let state = startPlayback(createPlaybackSession(track, 'session-1'), track, 0).state
+  state = observePlayback(state, 1000, 120000).state
+  assert.equal(state.listenedMs, 1000)
+  state = seekPlayback(state, 90000)
+  state = observePlayback(state, 91000, 120000).state
+  assert.equal(state.listenedMs, 2000)
+})
+
+test('repeat starts a new playback session for deduplicated statistics', () => {
+  const track = { id: 'audio:repeat', playbackType: 'audio' }
+  const started = startPlayback(createPlaybackSession(track, 'session-old'), track, 0)
+  const completed = observePlayback(started.state, 108000, 120000)
+  const repeated = startPlayback(completed.state, track, 0)
+  assert.equal(repeated.event.type, 'REPEAT')
+  assert.notEqual(repeated.state.sessionId, 'session-old')
+})

@@ -17,6 +17,17 @@ final class MusicTrackIdentity {
         return sha256(normalize(track.provider()) + "\0" + normalize(track.id()));
     }
 
+    /** Cross-provider identity used only for recommendation novelty and duplicate suppression. */
+    static String canonicalKey(MusicTrackBo track) {
+        String artist = track.artists() == null || track.artists().isEmpty() ? "" : track.artists().get(0);
+        return canonicalKey(track.name(), artist);
+    }
+
+    static String canonicalKey(String title, String primaryArtist) {
+        return sha256(MusicTextNormalizer.normalize(title) + "\0"
+                + MusicTextNormalizer.normalize(primaryArtist));
+    }
+
     static String contentText(MusicTrackBo track, Iterable<String> tags) {
         StringBuilder text = new StringBuilder();
         append(text, track.name());

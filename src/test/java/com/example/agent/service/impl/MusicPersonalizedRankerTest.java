@@ -83,6 +83,22 @@ class MusicPersonalizedRankerTest {
                 .filter(track -> track.artists().contains("Same Artist")).count()).isEqualTo(2);
     }
 
+    @Test
+    void refreshNoveltyExclusionAlsoAppliesInsidePersonalizedAndGraphRanking() {
+        Fixture fixture = fixture();
+        MusicTrackBo seen = track("qq:seen", "Repeated Song", "Known Artist");
+        MusicTrackBo fresh = track("qq:fresh", "Fresh Song", "New Artist");
+        var novelty = new MusicRecommendationNoveltyPolicy.Context(
+                "fingerprint", 2, true, 2, 1,
+                Set.of(MusicTrackIdentity.key(seen)),
+                Set.of(MusicTrackIdentity.canonicalKey(seen)));
+
+        var result = fixture.ranker.rank(UUID.randomUUID(), command("换一批"), discoveryPlan(),
+                List.of(seen, fresh), Set.of("qq"), 10, novelty);
+
+        assertThat(result.tracks()).extracting(MusicTrackBo::id).containsExactly("qq:fresh");
+    }
+
     private static Fixture fixture() {
         MusicPersonalizationRepository repository = mock(MusicPersonalizationRepository.class);
         MusicEmbeddingClient embeddings = mock(MusicEmbeddingClient.class);

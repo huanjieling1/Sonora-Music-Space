@@ -1,5 +1,9 @@
 package com.example.agent.service.impl;
 
+import com.example.agent.agent.contract.MusicWorkflowSnapshot;
+import com.example.agent.agent.contract.MusicWorkflowStatus;
+import com.example.agent.agent.contract.MusicWorkflowTaskSnapshot;
+import com.example.agent.agent.contract.MusicWorkflowTaskStatus;
 import com.example.agent.model.ao.ChatAo;
 import com.example.agent.model.bo.AgentActionBo;
 import com.example.agent.model.bo.AgentActionType;
@@ -9,6 +13,8 @@ import com.example.agent.model.bo.MusicTrackBo;
 import com.example.agent.model.bo.QqMusicSearchBo;
 import com.example.agent.model.bo.QqPlaylistSearchResultBo;
 import com.example.agent.model.bo.QqArtistSearchResultBo;
+import com.example.agent.model.bo.ProactiveSuggestionsBo;
+import com.example.agent.agent.contract.MusicProactiveSuggestion;
 import com.example.agent.model.entity.AgentChatMessage;
 import com.example.agent.model.entity.AgentConversation;
 import com.example.agent.service.AgentChatService;
@@ -74,6 +80,10 @@ class ConversationServiceImplTest {
                 AgentActionBo.showMusic(recommendation),
                 AgentActionBo.showQqPlaylists(playlistSearch()),
                 AgentActionBo.showQqArtists(artistSearch()),
+                AgentActionBo.showProactiveSuggestions(new ProactiveSuggestionsBo("接下来想怎么听",
+                        List.of(new MusicProactiveSuggestion("再安静一点", "推荐更安静的歌",
+                                "music-discovery", false)))),
+                AgentActionBo.showWorkflow(workflow()),
                 AgentActionBo.playTrack(track),
                 AgentActionBo.queueMusic(recommendation));
         when(agentChatService.chat(7L, conversationId, "播放 Mili"))
@@ -88,11 +98,16 @@ class ConversationServiceImplTest {
         AgentActionBo[] persisted = objectMapper.readValue(json.getValue(), AgentActionBo[].class);
         assertThat(persisted).extracting(AgentActionBo::type)
                 .containsExactly(AgentActionType.SHOW_MUSIC_RESULTS, AgentActionType.SHOW_QQ_PLAYLIST_RESULTS,
-                        AgentActionType.SHOW_QQ_ARTIST_RESULTS);
+                        AgentActionType.SHOW_QQ_ARTIST_RESULTS, AgentActionType.SHOW_PROACTIVE_SUGGESTIONS,
+                        AgentActionType.SHOW_WORKFLOW_PROGRESS);
         assertThat(persisted[1].playlistSearch().playlists()).singleElement()
                 .satisfies(playlist -> assertThat(playlist.name()).isEqualTo("Mili 精选歌单"));
         assertThat(persisted[2].artistSearch().artists()).singleElement()
                 .satisfies(artist -> assertThat(artist.name()).isEqualTo("Mili"));
+        assertThat(persisted[3].proactiveSuggestions().items()).singleElement()
+                .satisfies(item -> assertThat(item.prompt()).isEqualTo("推荐更安静的歌"));
+        assertThat(persisted[4].workflow().tasks()).singleElement()
+                .satisfies(task -> assertThat(task.status()).isEqualTo(MusicWorkflowTaskStatus.COMPLETED));
     }
 
     private static MusicRecommendationBo recommendation() {
@@ -117,5 +132,11 @@ class ConversationServiceImplTest {
                 "https://y.qq.com/n/ryqq/singer/0030xQJo2D8d6H", 1, 1, 0, false, false,
                 List.of(recommendation().tracks().get(0)), List.of(), "简介摘要", "目录成就摘要", "曲风摘要");
         return new QqArtistSearchResultBo(null, "Mili", 1, 5, 1, false, List.of(artist));
+    }
+
+    private static MusicWorkflowSnapshot workflow() {
+        return new MusicWorkflowSnapshot(UUID.randomUUID(), "找到真实音乐", MusicWorkflowStatus.COMPLETED,
+                List.of(new MusicWorkflowTaskSnapshot("execution", "搜索真实歌曲", "Execution Agent",
+                        MusicWorkflowTaskStatus.COMPLETED, 1, 2, "")));
     }
 }

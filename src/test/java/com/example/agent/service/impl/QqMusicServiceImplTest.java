@@ -108,6 +108,7 @@ class QqMusicServiceImplTest {
             assertThat(track.id()).isEqualTo("qq:0039MnYb0qxYhV");
             assertThat(track.playbackUrl()).contains("/api/music/qq/play/0039MnYb0qxYhV");
             assertThat(track.imageUrl()).contains("000MkMni19ClKG");
+            assertThat(track.albumId()).isEqualTo("000MkMni19ClKG");
         });
         verify(sidecar).search("acg", "TRACK", 20, 1);
     }

@@ -35,7 +35,7 @@ public class MusicKeywordExtractorImpl implements MusicKeywordExtractor {
             keyword = MusicTextNormalizer.primarySearchQuery(original);
         }
         return new ExtractedKeyword(keyword.strip(), execution.intent(),
-                planCompiler.understanding(execution, List.of()));
+                planCompiler.understanding(execution, List.of()), proposed);
     }
 
     /**

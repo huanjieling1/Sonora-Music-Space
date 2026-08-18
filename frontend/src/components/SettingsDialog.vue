@@ -1,8 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  BarChart3,
   CheckCircle2,
   CircleAlert,
+  Clock3,
+  Disc3,
   KeyRound,
   LoaderCircle,
   Music2,
@@ -11,6 +14,7 @@ import {
   Settings2,
   ShieldCheck,
   Smartphone,
+  Tag,
   Trash2,
   X,
 } from 'lucide-vue-next'
@@ -21,6 +25,10 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close'])
+const activeSection = ref('qq')
+const profile = ref(null)
+const profileLoading = ref(false)
+const profileError = ref('')
 
 const qqStatus = ref({
   enabled: false,
@@ -50,9 +58,20 @@ const statusLabel = computed(() => {
 const statusTone = computed(() => (
   qqStatus.value.bridgeAvailable && qqStatus.value.sessionConfigured ? 'ready' : 'pending'
 ))
+const analytics = computed(() => profile.value?.analytics || null)
+const profileProgress = computed(() => {
+  const value = analytics.value
+  if (!value || value.profileReady) return 100
+  const plays = value.requiredPlayCount > 0 ? value.playCount / value.requiredPlayCount : 0
+  const tracks = value.requiredUniqueTracks > 0 ? value.uniqueTracks / value.requiredUniqueTracks : 0
+  return Math.round(Math.min(1, Math.min(plays, tracks)) * 100)
+})
 
 watch(() => props.open, value => {
-  if (value) refreshQqStatus()
+  if (value) {
+    refreshQqStatus()
+    refreshProfile()
+  }
   else closeQrLogin()
 })
 
@@ -100,6 +119,33 @@ async function refreshQqStatus() {
   } finally {
     loading.value = false
   }
+}
+
+async function refreshProfile() {
+  if (profileLoading.value) return
+  profileLoading.value = true
+  profileError.value = ''
+  try {
+    const result = await request('/api/music/profile')
+    profile.value = result.data
+  } catch (error) {
+    profileError.value = error.message
+  } finally {
+    profileLoading.value = false
+  }
+}
+
+function selectSection(section) {
+  activeSection.value = section
+  if (section === 'profile' && !profile.value) refreshProfile()
+}
+
+function minutes(milliseconds) {
+  return Math.round(Math.max(0, Number(milliseconds) || 0) / 60000)
+}
+
+function percent(value) {
+  return `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
 }
 
 async function startQrLogin() {
@@ -219,15 +265,20 @@ async function clearQqSession() {
               </div>
             </div>
             <nav aria-label="设置分类">
-              <button class="active" type="button">
+              <button :class="{ active: activeSection === 'qq' }" type="button" @click="selectSection('qq')">
                 <Music2 :size="17" />
                 <span>QQ 音乐</span>
               </button>
+              <button :class="{ active: activeSection === 'profile' }" type="button" @click="selectSection('profile')">
+                <BarChart3 :size="17" />
+                <span>我的画像</span>
+              </button>
             </nav>
-            <p class="settings-future">后续账号、播放和隐私设置都会集中在这里。</p>
+            <p class="settings-future">播放统计与画像只属于当前登录用户，并可解释每个标签的生成依据。</p>
           </aside>
 
           <div class="settings-content">
+            <template v-if="activeSection === 'qq'">
             <header class="settings-header">
               <div>
                 <span class="settings-eyebrow">MUSIC CONNECTION</span>
@@ -341,6 +392,88 @@ async function clearQqSession() {
                 <Trash2 :size="15" /> 清除
               </button>
             </section>
+            </template>
+
+            <template v-else>
+              <header class="settings-header">
+                <div>
+                  <span class="settings-eyebrow">LISTENING PROFILE</span>
+                  <h2>我的音乐画像</h2>
+                  <p>根据实际播放、完播、跳过、循环以及带来源的歌曲标签，生成可核对的收听画像。</p>
+                </div>
+                <button class="settings-close" type="button" title="关闭设置" aria-label="关闭设置" @click="emit('close')">
+                  <X :size="20" />
+                </button>
+              </header>
+
+              <div v-if="profileLoading && !profile" class="profile-loading">
+                <LoaderCircle class="spin" :size="24" /> 正在汇总收听记录…
+              </div>
+              <p v-else-if="profileError" class="settings-message error">
+                <CircleAlert :size="15" /> {{ profileError }}
+                <button type="button" @click="refreshProfile">重试</button>
+              </p>
+              <template v-else-if="analytics">
+                <section class="profile-hero" :class="{ ready: analytics.profileReady }">
+                  <div>
+                    <span>{{ profile?.summary?.stageLabel || '收听画像' }}</span>
+                    <h3>{{ analytics.profileReady ? '你的音乐偏好标签已开始形成' : '正在积累可靠的收听证据' }}</h3>
+                    <p v-if="analytics.profileReady">所有标签都由歌曲、歌手和播放行为统计生成，不推断无关的个人属性。</p>
+                    <p v-else>需要 {{ analytics.requiredPlayCount }} 次有效播放和 {{ analytics.requiredUniqueTracks }} 首不同歌曲；当前为 {{ analytics.playCount }} 次、{{ analytics.uniqueTracks }} 首。</p>
+                  </div>
+                  <strong>{{ analytics.profileReady ? '画像可用' : `${profileProgress}%` }}</strong>
+                  <div class="profile-progress"><i :style="{ width: `${profileProgress}%` }"></i></div>
+                </section>
+
+                <section class="profile-metrics">
+                  <article><Disc3 :size="17" /><span>有效播放</span><strong>{{ analytics.playCount }}</strong></article>
+                  <article><Music2 :size="17" /><span>不同歌曲</span><strong>{{ analytics.uniqueTracks }}</strong></article>
+                  <article><CheckCircle2 :size="17" /><span>完播率</span><strong>{{ percent(analytics.completionRate) }}</strong></article>
+                  <article><Clock3 :size="17" /><span>实际收听</span><strong>{{ minutes(analytics.totalPlaybackMs) }} 分钟</strong></article>
+                </section>
+
+                <section class="settings-section profile-section">
+                  <div class="section-heading"><div><h3>用户标签</h3><p>达到数据门槛后生成，每个标签都附带统计依据。</p></div><Tag :size="18" /></div>
+                  <div v-if="analytics.labels?.length" class="profile-labels">
+                    <article v-for="label in analytics.labels" :key="label.code">
+                      <strong>{{ label.name }}</strong><span>{{ label.basis }}</span><small>可信度 {{ percent(label.confidence) }}</small>
+                    </article>
+                  </div>
+                  <p v-else class="profile-empty-copy">{{ analytics.profileReady ? '数据量已经足够，但当前还没有达到任一偏好特征的显著阈值。' : '数据量尚未达到标签生成门槛，系统不会提前猜测你的偏好。' }}</p>
+                </section>
+
+                <section class="profile-rankings">
+                  <article>
+                    <header><h3>最常听歌曲</h3><span>TOP TRACKS</span></header>
+                    <ol><li v-for="track in analytics.topTracks?.slice(0, 5)" :key="track.trackKey"><div><strong>{{ track.title }}</strong><span>{{ track.artist || '未知艺人' }}</span></div><b>{{ track.playCount }} 次</b></li></ol>
+                    <p v-if="!analytics.topTracks?.length">还没有歌曲统计。</p>
+                  </article>
+                  <article>
+                    <header><h3>最常听歌手</h3><span>TOP ARTISTS</span></header>
+                    <ol><li v-for="artist in analytics.topArtists?.slice(0, 5)" :key="artist.name"><div><strong>{{ artist.name }}</strong><span>{{ artist.uniqueTracks }} 首歌曲</span></div><b>{{ artist.playCount }} 次</b></li></ol>
+                    <p v-if="!analytics.topArtists?.length">还没有歌手统计。</p>
+                  </article>
+                </section>
+
+                <section class="settings-section profile-section">
+                  <div class="section-heading"><div><h3>偏好标签</h3><p>标签保留 QQ 专辑、公开歌单等来源可信度后再参与统计。</p></div></div>
+                  <div class="profile-tags"><span v-for="tagItem in analytics.topTags?.slice(0, 10)" :key="`${tagItem.type}:${tagItem.value}`"><b>{{ tagItem.value }}</b><small>{{ tagItem.playCount }} 次 · {{ percent(tagItem.confidence) }} 可信</small></span></div>
+                  <p v-if="!analytics.topTags?.length" class="profile-empty-copy">播放带有曲风、语种或歌单标签的 QQ 音乐后，这里会逐步形成偏好。</p>
+                </section>
+
+                <div class="profile-refresh"><button class="settings-secondary" type="button" :disabled="profileLoading" @click="refreshProfile"><RefreshCw :class="{ spin: profileLoading }" :size="15" />刷新画像</button></div>
+              </template>
+              <section v-else class="profile-unavailable">
+                <CircleAlert :size="20" />
+                <div>
+                  <h3>画像数据暂不可用</h3>
+                  <p>当前服务尚未返回播放画像统计，请确认后端已更新并重启后再刷新。</p>
+                </div>
+                <button type="button" class="settings-secondary" @click="refreshProfile">
+                  <RefreshCw :size="14" />刷新画像
+                </button>
+              </section>
+            </template>
           </div>
         </section>
       </div>
@@ -452,6 +585,51 @@ async function clearQqSession() {
 .danger-row span { color: #737b87; font-size: 10px; }
 .danger-row button { border: 1px solid rgba(238, 111, 116, 0.22); background: rgba(238, 111, 116, 0.08); color: #eaa3a6; }
 
+.profile-loading { display: flex; min-height: 320px; align-items: center; justify-content: center; gap: 9px; color: #858c98; font-size: 11px; }
+.profile-unavailable { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 13px; margin-top: 28px; border: 1px solid rgba(238,111,116,.14); border-radius: 17px; padding: 18px; background: rgba(238,111,116,.04); color: #eaa3a6; }
+.profile-unavailable h3 { margin: 0 0 5px; color: #e6e8ed; font-size: 13px; }
+.profile-unavailable p { margin: 0; color: #858c98; font-size: 10px; line-height: 1.6; }
+.profile-unavailable button { display: inline-flex; align-items: center; gap: 6px; border-radius: 10px; padding: 8px 11px; font-size: 9px; white-space: nowrap; }
+.profile-hero { position: relative; display: grid; grid-template-columns:minmax(0,1fr) auto; gap: 12px; margin-top: 28px; overflow: hidden; border: 1px solid rgba(158,140,255,.16); border-radius: 18px; padding: 20px; background: linear-gradient(135deg,rgba(158,140,255,.11),rgba(104,219,184,.045)); }
+.profile-hero.ready { border-color: rgba(104,219,184,.2); }
+.profile-hero > div:first-child { display: grid; gap: 5px; }
+.profile-hero span { color: #a99cec; font-size: 9px; font-weight: 750; letter-spacing: .08em; }
+.profile-hero h3 { margin: 0; font-size: 17px; }
+.profile-hero p { max-width: 520px; margin: 0; color: #7f8793; font-size: 10px; line-height: 1.65; }
+.profile-hero > strong { align-self: center; color: #9f91e6; font-size: 15px; }
+.profile-hero.ready > strong { color: #82dbb9; }
+.profile-progress { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; background: rgba(255,255,255,.05); }
+.profile-progress i { display: block; height: 100%; background: linear-gradient(90deg,#9f91e6,#82dbb9); transition: width .3s ease; }
+.profile-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; margin-top: 12px; }
+.profile-metrics article { display: grid; min-width: 0; gap: 5px; border: 1px solid rgba(255,255,255,.07); border-radius: 13px; padding: 13px; background: rgba(255,255,255,.025); color: #9f91e6; }
+.profile-metrics span { color: #737b87; font-size: 9px; }
+.profile-metrics strong { overflow: hidden; color: #e6e8ed; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-section .section-heading > svg { color: #9f91e6; }
+.profile-labels { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 14px; }
+.profile-labels article { display: grid; gap: 4px; border: 1px solid rgba(158,140,255,.13); border-radius: 12px; padding: 12px; background: rgba(158,140,255,.055); }
+.profile-labels strong { color: #e5e0ff; font-size: 12px; }
+.profile-labels span { color: #858c98; font-size: 9px; line-height: 1.5; }
+.profile-labels small { color: #77718f; font-size: 8px; }
+.profile-empty-copy { margin: 14px 0 0; color: #747c88; font-size: 10px; line-height: 1.6; }
+.profile-rankings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 18px; }
+.profile-rankings > article { min-width: 0; border: 1px solid rgba(255,255,255,.075); border-radius: 17px; padding: 16px; background: rgba(255,255,255,.02); }
+.profile-rankings header { display: flex; align-items: center; justify-content: space-between; }
+.profile-rankings h3 { margin: 0; font-size: 13px; }
+.profile-rankings header span { color: #696f7a; font-size: 8px; letter-spacing: .12em; }
+.profile-rankings ol { display: grid; gap: 2px; margin: 11px 0 0; padding: 0; list-style: none; counter-reset: rank; }
+.profile-rankings li { display: grid; grid-template-columns:minmax(0,1fr) auto; align-items: center; gap: 8px; border-radius: 9px; padding: 8px; counter-increment: rank; }
+.profile-rankings li:hover { background: rgba(255,255,255,.025); }
+.profile-rankings li div { display: grid; min-width: 0; gap: 3px; }
+.profile-rankings li strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-rankings li span,.profile-rankings > article > p { margin: 0; color: #717986; font-size: 8px; }
+.profile-rankings li b { color: #9f91e6; font-size: 9px; font-weight: 650; }
+.profile-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.profile-tags > span { display: grid; gap: 2px; border: 1px solid rgba(104,219,184,.12); border-radius: 999px; padding: 7px 10px; background: rgba(104,219,184,.045); }
+.profile-tags b { color: #a8dfca; font-size: 9px; }
+.profile-tags small { color: #687b75; font-size: 7px; }
+.profile-refresh { display: flex; justify-content: flex-end; margin-top: 14px; }
+.profile-refresh button,.settings-message button { display: inline-flex; align-items: center; gap: 6px; border-radius: 10px; padding: 8px 11px; font-size: 9px; }
+
 .settings-fade-enter-active, .settings-fade-leave-active { transition: opacity 180ms ease; }
 .settings-fade-enter-active .settings-dialog, .settings-fade-leave-active .settings-dialog { transition: transform 220ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease; }
 .settings-fade-enter-from, .settings-fade-leave-to { opacity: 0; }
@@ -473,5 +651,9 @@ async function clearQqSession() {
   .qr-instructions { align-items: center; text-align: center; }
   .settings-actions { flex-wrap: wrap; }
   .security-note { width: 100%; margin: 0; }
+  .profile-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .profile-labels,.profile-rankings { grid-template-columns: 1fr; }
+  .profile-unavailable { grid-template-columns: auto minmax(0,1fr); }
+  .profile-unavailable button { grid-column: 1 / -1; justify-self: end; }
 }
 </style>

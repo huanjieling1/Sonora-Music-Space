@@ -2,16 +2,22 @@ package com.example.agent.model.ao;
 
 import java.util.UUID;
 
-public record MusicRecommendationAo(Long userId, UUID conversationId, String description, int page, int pageSize) {
+public record MusicRecommendationAo(Long userId, UUID conversationId, String description,
+                                    int page, int pageSize, boolean refreshBatch) {
     public static final int MAX_PAGE = 20;
     public static final int MAX_PAGE_SIZE = 10;
 
     public MusicRecommendationAo(String description, int limit) {
-        this(null, null, description, 1, limit);
+        this(null, null, description, 1, limit, false);
     }
 
     public MusicRecommendationAo(String description, int page, int pageSize) {
-        this(null, null, description, page, pageSize);
+        this(null, null, description, page, pageSize, false);
+    }
+
+    public MusicRecommendationAo(Long userId, UUID conversationId, String description,
+                                 int page, int pageSize) {
+        this(userId, conversationId, description, page, pageSize, false);
     }
 
     public MusicRecommendationAo {
