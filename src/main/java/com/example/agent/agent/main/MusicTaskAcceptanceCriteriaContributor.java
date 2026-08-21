@@ -67,6 +67,9 @@ final class ExecutionAcceptanceCriteriaContributor implements MusicTaskAcceptanc
             }
         } else if (intent.target() == MusicIntentDraft.Target.ARTIST) {
             criteria.add("必须返回真实 QQ 音乐艺人卡片及来源资料");
+            if (understanding.route() == com.example.agent.agent.contract.MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE) {
+                criteria.add("查询关键词必须是画像证据解析出的歌手实体，禁止透传用户整句请求");
+            }
         } else if (intent.mode() == MusicIntentDraft.Mode.TRENDING) {
             criteria.add("必须包含榜单来源、统计周期和排名依据");
         } else if (intent.target() == MusicIntentDraft.Target.TRACK

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   BarChart3,
   CheckCircle2,
@@ -29,6 +29,7 @@ const activeSection = ref('qq')
 const profile = ref(null)
 const profileLoading = ref(false)
 const profileError = ref('')
+const settingsContent = ref(null)
 
 const qqStatus = ref({
   enabled: false,
@@ -73,6 +74,11 @@ watch(() => props.open, value => {
     refreshProfile()
   }
   else closeQrLogin()
+})
+
+watch(activeSection, async () => {
+  await nextTick()
+  settingsContent.value?.scrollTo({ top: 0, behavior: 'auto' })
 })
 
 onMounted(() => window.addEventListener('keydown', handleKeydown))
@@ -277,7 +283,7 @@ async function clearQqSession() {
             <p class="settings-future">播放统计与画像只属于当前登录用户，并可解释每个标签的生成依据。</p>
           </aside>
 
-          <div class="settings-content">
+          <div ref="settingsContent" class="settings-content" tabindex="0" aria-label="设置内容">
             <template v-if="activeSection === 'qq'">
             <header class="settings-header">
               <div>
@@ -496,8 +502,11 @@ async function clearQqSession() {
 .settings-dialog {
   display: grid;
   width: min(880px, 100%);
+  height: min(680px, calc(100dvh - 48px));
+  min-height: 0;
   max-height: min(680px, calc(100dvh - 48px));
   grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 24px;
@@ -527,7 +536,25 @@ async function clearQqSession() {
 .settings-nav nav button.active { background: rgba(158, 140, 255, 0.13); color: #e4dfff; }
 .settings-future { margin: auto 8px 0; color: #626975; font-size: 10px; line-height: 1.7; }
 
-.settings-content { min-width: 0; overflow-y: auto; padding: 28px; }
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 28px;
+  outline: none;
+  scrollbar-color: rgba(158, 140, 255, 0.42) rgba(255, 255, 255, 0.025);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+.settings-content:focus-visible { box-shadow: inset 0 0 0 1px rgba(158, 140, 255, 0.2); }
+.settings-content::-webkit-scrollbar { width: 8px; }
+.settings-content::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.025); }
+.settings-content::-webkit-scrollbar-thumb { border: 2px solid #111419; border-radius: 999px; background: rgba(158, 140, 255, 0.42); }
+.settings-content::-webkit-scrollbar-thumb:hover { background: rgba(158, 140, 255, 0.65); }
 .settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .settings-eyebrow { color: #9f91e6; font-size: 10px; font-weight: 760; letter-spacing: 0.16em; }
 .settings-header h2 { margin: 7px 0 6px; font-size: 25px; letter-spacing: -0.035em; }
@@ -637,7 +664,7 @@ async function clearQqSession() {
 
 @media (max-width: 700px) {
   .settings-backdrop { padding: 10px; }
-  .settings-dialog { max-height: calc(100dvh - 20px); grid-template-columns: 1fr; border-radius: 18px; }
+  .settings-dialog { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); border-radius: 18px; }
   .settings-nav { min-height: auto; flex-direction: row; align-items: center; gap: 12px; padding: 12px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.075); }
   .settings-brand { padding: 0; }
   .settings-brand div, .settings-future { display: none; }

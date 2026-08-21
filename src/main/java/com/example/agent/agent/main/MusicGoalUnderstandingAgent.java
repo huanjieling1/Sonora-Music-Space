@@ -110,6 +110,7 @@ public final class MusicGoalUnderstandingAgent {
 
         boolean usesProfile = route == MusicAgentRoute.RECOMMENDATION_FOLLOW_UP
                 || route == MusicAgentRoute.SUPPORTIVE_MUSIC
+                || route == MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE
                 || (route == MusicAgentRoute.MUSIC_DISCOVERY && (understanding.intent().personalized()
                 || MusicIntentAgent.shouldUseRecommendationProfile(turn.request())));
         return new MusicGoalUnderstanding(understanding, route, scope, usesProfile,

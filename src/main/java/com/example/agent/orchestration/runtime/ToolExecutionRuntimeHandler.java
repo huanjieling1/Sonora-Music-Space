@@ -9,6 +9,7 @@ import java.util.Set;
 public final class ToolExecutionRuntimeHandler implements MusicWorkflowRuntimeHandler {
     private static final Set<MusicAgentRoute> ROUTES = Set.of(MusicAgentRoute.RANDOM_PUBLIC_PLAYLIST,
             MusicAgentRoute.PLAYLIST_SEARCH, MusicAgentRoute.ARTIST_LOOKUP,
+            MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE,
             MusicAgentRoute.QQ_TREND_DISCOVERY, MusicAgentRoute.MUSIC_DISCOVERY,
             MusicAgentRoute.RESULT_PLAYBACK, MusicAgentRoute.RESULT_NAVIGATION,
             MusicAgentRoute.QUEUE_CONTROL);
@@ -17,6 +18,7 @@ public final class ToolExecutionRuntimeHandler implements MusicWorkflowRuntimeHa
     @Override public String id() { return "verified-tool-execution"; }
     @Override public Set<MusicAgentRoute> routes() { return ROUTES; }
     @Override public MusicWorkflowOutcome execute(MusicWorkflowExecutionContext context) {
-        return runtime.execute(context);
+        return context.route() == MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE
+                ? runtime.personalizedArtistProfile(context) : runtime.execute(context);
     }
 }

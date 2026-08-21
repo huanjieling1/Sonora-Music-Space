@@ -20,6 +20,14 @@ class MusicIntentAgentTest {
     }
 
     @Test
+    void routesFavoriteArtistProfileAsACompositeWorkflow() {
+        assertThat(agent.classify("把你认为的我最喜欢的歌手的个人资料找出来"))
+                .isEqualTo(MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE);
+        assertThat(MusicIntentAgent.shouldUseRecommendationProfile(
+                "把你认为的我最喜欢的歌手的个人资料找出来")).isTrue();
+    }
+
+    @Test
     void currentRecommendationRequestOverridesProfileWording() {
         assertThat(agent.classify("根据我的画像推荐一些适合夜晚的歌"))
                 .isEqualTo(MusicAgentRoute.MUSIC_DISCOVERY);

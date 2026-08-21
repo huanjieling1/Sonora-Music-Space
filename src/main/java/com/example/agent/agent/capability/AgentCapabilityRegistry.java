@@ -63,6 +63,16 @@ public class AgentCapabilityRegistry {
         return toolNames;
     }
 
+    /** Only strongly typed, policy-complete capabilities may be shown to the generic planner. */
+    public List<AgentCapabilityDefinition> planningCapabilities() {
+        return capabilities.stream().filter(AgentCapabilityDefinition::plannerVisible).toList();
+    }
+
+    public java.util.Optional<AgentCapabilityDefinition> find(String capabilityId) {
+        if (capabilityId == null || capabilityId.isBlank()) return java.util.Optional.empty();
+        return capabilities.stream().filter(value -> value.id().equals(capabilityId.strip())).findFirst();
+    }
+
     public boolean supportsTool(String toolName) {
         return toolName != null && toolNames.contains(toolName);
     }
@@ -113,6 +123,7 @@ public class AgentCapabilityRegistry {
             throw new IllegalStateException("At least one runtime capability is required");
         }
         Map<String, AgentCapabilityDefinition> byId = new LinkedHashMap<>();
+        Map<String, CapabilitySchema> schemas = new LinkedHashMap<>();
         LinkedHashSet<String> knownTools = new LinkedHashSet<>(registeredTools);
         for (AgentCapabilityDefinition capability : discovered) {
             if (byId.putIfAbsent(capability.id(), capability) != null) {
@@ -124,6 +135,9 @@ public class AgentCapabilityRegistry {
                 throw new IllegalStateException("Capability " + capability.id()
                         + " references tools that are not actually registered: " + unknown);
             }
+            validatePlannerContract(capability);
+            registerSchema(schemas, capability.inputSchema(), capability.id());
+            registerSchema(schemas, capability.outputSchema(), capability.id());
             for (String term : capability.activationTerms()) {
                 if (term.regionMatches(true, 0, REGEX_PREFIX, 0, REGEX_PREFIX.length())) {
                     Pattern.compile(term.substring(REGEX_PREFIX.length()),
@@ -132,5 +146,38 @@ public class AgentCapabilityRegistry {
             }
         }
         return List.copyOf(byId.values());
+    }
+
+    private static void validatePlannerContract(AgentCapabilityDefinition capability) {
+        if (!capability.plannerVisible()) return;
+        if (capability.outputSchema().fields().isEmpty()) {
+            throw new IllegalStateException("Planner capability " + capability.id()
+                    + " must declare at least one output field");
+        }
+        if (capability.sideEffect() != CapabilitySideEffect.READ_ONLY
+                && capability.confirmationPolicy() == CapabilityConfirmationPolicy.NEVER) {
+            throw new IllegalStateException("Mutating planner capability " + capability.id()
+                    + " must declare a confirmation policy");
+        }
+        LinkedHashSet<String> preconditionIds = new LinkedHashSet<>();
+        for (CapabilityPrecondition condition : capability.preconditions()) {
+            if (!preconditionIds.add(condition.id())) {
+                throw new IllegalStateException("Capability " + capability.id()
+                        + " has duplicate precondition: " + condition.id());
+            }
+        }
+        if (capability.evidencePolicy().requiredTypes().isEmpty()) {
+            throw new IllegalStateException("Planner capability " + capability.id()
+                    + " must declare verifiable evidence");
+        }
+    }
+
+    private static void registerSchema(Map<String, CapabilitySchema> schemas,
+                                       CapabilitySchema schema, String capabilityId) {
+        CapabilitySchema previous = schemas.putIfAbsent(schema.id(), schema);
+        if (previous != null && !previous.equals(schema)) {
+            throw new IllegalStateException("Schema conflict for " + schema.id()
+                    + " while registering capability " + capabilityId);
+        }
     }
 }

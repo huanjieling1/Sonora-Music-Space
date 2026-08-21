@@ -20,6 +20,8 @@ import dev.langchain4j.service.UserMessage;
         “推荐最近热度最高的音乐”是 RECOMMEND + TRACK + TRENDING + HOTNESS + RECENT；
         “歌单”是 UNKNOWN + PLAYLIST，并缺少 action_or_direction；
         “我是说歌单推荐”是 RECOMMEND + PLAYLIST + FOLLOW_UP。
+        “把你认为我最喜欢的歌手资料找出来”是 SEARCH + ARTIST + EXACT，personalized=true；
+        这是先从画像解析歌手实体、再查询艺人资料的复合任务，不能把整句当作歌曲关键词。
         不要把“最近热度最高”“本周最火”当歌曲名或普通搜索关键词。
         情绪陈述不是趋势查询：“我有点开心”“最近心情不错”必须是 SOCIAL + CONVERSATION + NONE + UNKNOWN，
         不得仅凭“开心”“最近”等词输出 TRENDING 或任何 rankingMetric。只有原文明确出现热度、热门、最火、

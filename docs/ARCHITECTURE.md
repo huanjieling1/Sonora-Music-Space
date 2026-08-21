@@ -1,5 +1,8 @@
 # Sonora Music Space 架构说明
 
+> 个性化复合查询（例如“推断我最喜欢的歌手并查询资料”）的专项设计见
+> [个性化实体解析与资料查询架构](PERSONALIZED_ENTITY_RESOLUTION_ARCHITECTURE.md)。
+
 本文档描述 Sonora Music Space 当前代码的系统边界、运行组件、核心数据流和长期开发约束。README 面向
 项目使用者，本文件面向需要理解、维护或扩展代码的开发者。
 
@@ -627,3 +630,261 @@ Pinia Store 保存当前曲目、队列、播放模式和切歌上下文。搜�
 - Agent Tool 必须被 Skill 覆盖并通过启动校验。
 - 外部依赖必须有超时、错误隔离和可解释降级路径。
 - 本机配置、运行数据、数据库备份和浏览器 Profile 不进入版本库。
+
+## 15. 通用规划器的两层验收
+
+动态计划不会把“工具接口返回成功”等同于“用户目标完成”。每个类型化结果进入结果仓库前先经过
+`TaskEvaluator`，依次检查 Output Schema、provider/resourceId、实体一致性、任务验收条件和副作用状态
+证据。判定不是布尔值，而是 `PASS / REVISE / REPLAN / ASK_USER / FAIL` 五种执行控制信号。
+
+```mermaid
+flowchart LR
+    Tool[能力适配器结果] --> TE[TaskEvaluator]
+    TE -->|PASS| Store[TaskResultStore]
+    TE -->|REVISE| Retry[任务级安全重试]
+    TE -->|REPLAN| Replan[局部重规划入口]
+    TE -->|ASK_USER| Wait[WAITING_USER]
+    TE -->|FAIL| Failed[工作流失败]
+    Store --> GE[GoalEvaluator]
+    GE --> Coverage[目标覆盖/遗漏检查]
+    GE --> Constraints[数量/时间/场景约束]
+    GE --> Claims[最终结论证据检查]
+    Coverage --> Complete{全部 PASS?}
+    Constraints --> Complete
+    Claims --> Complete
+    Complete -->|是| Done[COMPLETED]
+    Complete -->|否| NotDone[不可显示完成]
+```
+
+`DagTaskState` 会持久化任务验收结论。通用 DAG 运行时仅允许验收为 `PASS` 的任务进入
+`COMPLETED`，并要求每个 Goal 同时存在已通过的实现任务与 `planner.goal.accept` 任务。最终回复中的每条
+事实性结论使用 `GroundedClaim` 显式引用任务 `evidenceIds`；未知或缺失证据会返回 `REVISE`。
+
+## 16. 有界局部重规划
+
+实现 `ReplanningDagTaskExecutor` 的能力适配器可以在任务失败后向 `BoundedReplanner` 提交替换子图。
+重规划请求包含失败任务、原错误码、原验收条件、用户补充输入、已通过结果和历史方案指纹。
+
+```mermaid
+flowchart LR
+    F[失败任务] --> S[定位失败任务及全部下游]
+    S --> Freeze[冻结子图外已验收结果]
+    S --> Request[ReplanRequest]
+    Request --> Strategy[SubgraphReplanStrategy]
+    Strategy --> Guard{有界安全校验}
+    Guard -->|新方案且合法| Patch[只替换失败子图]
+    Guard -->|缺信息/副作用风险| Ask[ASK_USER]
+    Guard -->|超限/重复/非法| Fail[FAIL]
+    Patch --> Resume[从替换子图继续执行]
+```
+
+替换方案必须保持失败子图的边界任务 ID、保留每个任务原验收条件、只使用已注册能力且不能引入循环依赖。
+SHA-256 方案指纹用于拒绝当前失败方案和历史失败方案。`CompiledPlan.maxReplans` 是工作流级硬上限。
+已尝试的副作用任务默认禁止重放；只有用户输入 `replan.replay.<taskId>=true` 后才允许 Replanner 继续，且
+运行时沿用原幂等键。每次尝试的错误码、替换范围、保留范围、指纹和结果都以 `ReplanRecord` 写入工作流
+快照，因此刷新或进程恢复不会丢失重规划审计信息。
+
+## 17. 副作用确认与恢复
+
+所有 `sideEffect != READ_ONLY` 且确认策略不是 `NEVER` 的能力，都会在任务尝试次数递增和工具调用之前经过
+`ConfirmationManager`。因此当前的播放、加入队列、收藏能力，以及以后注册的建歌单等变更能力，自动继承
+相同的确认闸门。
+
+```mermaid
+stateDiagram-v2
+    [*] --> ResolveInputs
+    ResolveInputs --> WAITING_USER: 缺少必填参数
+    WAITING_USER --> ResolveInputs: 用户补参后重新绑定
+    ResolveInputs --> ConfirmationPending: 副作用输入已确定
+    ConfirmationPending --> PENDING: 用户批准且未过期
+    ConfirmationPending --> SKIPPED: 用户拒绝
+    ConfirmationPending --> FAILED: 确认过期
+    PENDING --> RUNNING: 参数及幂等键仍与确认一致
+    RUNNING --> COMPLETED: 执行并通过验收
+```
+
+`ConfirmationRequest` 绑定 `workflowId + principalId + taskId + capabilityId`，保存待执行输入、幂等键、创建
+时间和过期时间。回复槽位包含随机 `requestId`，旧页面中的确认不能批准新请求。批准只对完全相同的输入和
+幂等键有效；参数变化会生成新确认。默认有效期为十分钟，过期请求转为 `EXPIRED`，不能重新批准。
+
+确认请求作为 `DagTaskState` 的一部分写入现有工作流 JSON 快照。用户刷新页面或后端进程重启后，仍可读取
+同一个待确认任务并通过 `resume` 继续。拒绝会把当前任务标为 `SKIPPED`，通用 DAG 随后自动跳过其下游；
+缺参任务则在收到用户值后重新执行 `ValueExpression` 绑定，不复用旧的解析结果。
+
+## 18. 证据化最终响应
+
+通用工作流完成、失败或暂停后，由 `GenericWorkflowResponseAgent` 读取原始 `UserGoalGraph` 和持久化的
+`DagExecutionSnapshot`。Response Agent 不直接总结所有任务输出；`FinalResponseGuard` 会先重建一个可发布
+结果集，只有同时满足以下条件的实现任务才能成为回复事实：
+
+- `DagTaskStatus == COMPLETED`；
+- `TaskEvaluation.decision == PASS`；
+- `TypedTaskResult.successful == true` 且携带证据；
+- 所属 Goal 的完成状态还必须由通过的 `planner.goal.accept` 任务确认。
+
+```mermaid
+flowchart LR
+    Graph[UserGoalGraph 原始顺序] --> Guard[FinalResponseGuard]
+    Snapshot[DAG 快照] --> Guard
+    Guard --> Accepted[已验收实现任务]
+    Guard --> Status[完成/部分/等待/跳过/失败]
+    Accepted --> Facts[GroundedResponseFact]
+    Facts --> Kind[外部事实 / 推断 / 状态变更]
+    Facts --> Evidence[evidenceIds + typed entityIds]
+    Status --> Sections[GoalResponseSection]
+    Evidence --> Sections
+    Sections --> Answer[按原始目标顺序的文本]
+    Sections --> Actions[前端 ResponseCardAction]
+```
+
+每个 Goal 都会出现在最终响应中，顺序严格采用目标图的用户原始顺序。没有完全通过验收的目标显示为
+`PARTIAL / WAITING_USER / SKIPPED / FAILED`，不会被包装成成功。部分目标可以展示其中已验收的事实，但只为
+完整完成的目标生成卡片 Action。
+
+事实按来源语义标记为 `EXTERNAL_FACT`、`INFERENCE` 或 `STATE_CHANGE`，每条事实都可转换为携带
+`evidenceIds` 的 `GroundedClaim`。前端卡片不复制任意 provider/model 输出：实体身份只取
+`TypedEntityReference`，payload 只保留数量、画像阶段、统计窗口和副作用状态等安全标量。这样即使失败任务
+残留结果、模型输出加入新名称，或传入了不属于目标图的快照，也无法进入最终答案或卡片。
+
+统一调度器通过 `respondCompiled(graph, snapshot)` 暴露该响应边界。旧固定 Route 的 `MusicResponseAgent` 与
+`AgentResponseGuard` 暂时保留，等待阶段十二迁移；动态计划全部使用新的通用响应合同。
+
+## 19. 旧功能的动态计划迁移
+
+阶段十二采用绞杀式迁移。`MusicAgentRoute` 暂时作为旧客户端和旧意图分类器的兼容协议存在，但不再是新能力
+的扩展点。`LegacyRouteGoalGraphAdapter` 把已迁移 Route 投影为 `UserGoalGraph`，随后统一经过
+`GenericPlanSynthesizer → PlanCompiler → GenericDagExecutor → GenericWorkflowResponseAgent`。
+
+```mermaid
+flowchart LR
+    Legacy[旧 MusicAgentRoute] --> Adapter[LegacyRouteGoalGraphAdapter]
+    Native[任意多意图 Goal Graph] --> Planner[通用 Planner / Compiler]
+    Adapter --> Planner
+    Planner --> DAG[GenericDagExecutor]
+    DAG --> Capability[MigratedMusicCapabilityExecutor]
+    Capability --> Bridge[旧工具实现兼容桥]
+    Capability --> Typed[TypedTaskResult]
+    Typed --> Response[证据化最终响应]
+    Planner -. 无副作用 .-> Shadow[Migration Shadow]
+    LegacyResult[旧线上执行结果] -.-> Shadow
+```
+
+当前迁移矩阵如下：
+
+| 现有功能 | 动态能力 |
+| --- | --- |
+| 个性化偏好歌手资料 | `profile.artist.resolve → qq.artist.lookup` |
+| 普通歌曲搜索、个性化推荐 | `music.track.search`，个性化时显式绑定只读画像 |
+| 艺人资料 | `qq.artist.lookup` |
+| 歌单搜索 | `qq.playlist.search` |
+| 趋势榜单 | `qq.chart.read` |
+| 播放控制 | `music.playback.play` |
+| 队列控制 | `music.queue.add` |
+| 推荐反馈 | `music.recommendation.feedback`，可串联新的 `music.track.search` |
+
+`MigratedMusicCapabilityExecutor` 是过渡期的 capability-id 执行入口。它从身份绑定的工作流上下文取得用户与
+会话，调用现有稳定工具实现，再把可信卡片证据转换为 Output Schema、规范实体和 evidence IDs 完整的
+`TypedTaskResult`。新能力只需注册 Capability 和对应执行适配器，不需要新增 `MusicAgentRoute`、
+`MusicWorkflowHandler` 或 `MusicWorkflowRuntimeHandler`。副作用仍由通用确认闸门和幂等键保护。
+
+线上旧路径保留期间，`MusicMigrationShadowService` 会编译同一请求的动态计划，并把计划所需能力、预期证据与
+旧路径真实执行状态进行对比。Shadow 不重复调用工具，尤其不会重复播放、入队或写反馈；不一致只记录审计
+结果，不改变旧响应。这样可以在逐能力切流前衡量兼容性，同时避免 shadow 造成副作用。
+
+首个专用固定 Handler `PersonalizedArtistProfileWorkflowHandler` 已删除，其旧展示计划暂时合并到 Catalog
+兼容 Handler。剩余固定 Handler 只服务旧入口，将按 shadow 稳定度逐步下线；任意多意图入口直接调用
+`MigratedMusicWorkflowService.executeGraph(...)`，不经过 Route 注册表。
+
+## 20. 规划器测试与离线评估
+
+阶段十三把回归测试拆成三层，并用同一份结构化报告形成发布门禁：
+
+```mermaid
+flowchart LR
+    Corpus[版本化基准语料] --> Decomposer[MusicGoalDecomposer]
+    Decomposer --> Match[Goal/Relation 精确匹配]
+    Decomposer --> Synthesis[GenericPlanSynthesizer]
+    Synthesis --> Compiler[PlanCompiler]
+    Compiler --> Property[Schema 属性与攻击测试]
+    Compiler --> Runtime[GenericDagExecutor 故障场景]
+    Runtime --> GroundTruth[真实满足 / 对外完成 对照]
+    Match --> Report[PlannerEvaluationReport]
+    Compiler --> Report
+    GroundTruth --> Report
+```
+
+`planner-evaluation-corpus.json` 是人工可审阅、可版本化的离线事实集，当前包含 18 个样本：单意图、双意图、
+三到六意图各 6 个，并覆盖串行、并行、条件、指代、画像和副作用分支。`PlannerBenchmarkEvaluator` 对每条
+请求执行真实的 Goal 分解、能力计划合成和安全编译，不把异常当作可编译成功。
+
+计划 Schema 使用固定随机种子的生成式属性测试：128 个 1–6 Goal 的合法 DAG 必须生成不超过边界、依赖
+严格拓扑有序的不可变计划；80 个带环 Goal Graph 必须全部在编译前拒绝；64 个随机原始请求标记必须既不能
+自然泄漏到工具参数，也不能通过恶意 Literal 注入。固定种子保证 CI 可复现，样本数可独立扩大。
+
+执行层沿用通用运行时测试，覆盖错误 Output Schema、超时、部分失败、确认拒绝、持久化暂停/恢复和只替换
+失败子图的局部重规划。画像解析对空画像与并列候选拒绝猜测；类型化实体证据同时携带规范名称、别名、
+provider 和 entityId，别名可以命中，但同名不同 ID 必须触发 `REPLAN`。
+
+四项指标口径如下：
+
+- Goal 分解准确率 = Goal 顺序及关系类型多重集完全正确的样本数 / 总基准样本数；
+- 计划可编译率 = 通过当前 Registry、Schema、安全与预算验证的样本数 / 总基准样本数；
+- 目标完成率 = 真实满足且对外报告完成的目标数 / 真实满足目标数；
+- 错误成功率 = 未真实满足却对外报告完成的目标数 / 未满足目标数。
+
+离线分数只代表当前受控语料与故障夹具，不替代阶段十四的线上 shadow 指标。最新基线、覆盖证据和复现命令
+记录在 `docs/PLANNER_EVALUATION_REPORT.md`。
+
+## 21. 可观测性与分级上线
+
+`PlannerObservability` 是动态规划链的统一结构化事件出口。Shadow 编译与真实动态执行共用事件模型，事件以
+`planner_event=<json>` 写入日志，并在进程内保留有界最近窗口供测试和健康诊断使用。
+
+```mermaid
+flowchart LR
+    Goal[Goal Graph] --> Obs[PlannerObservability]
+    Plan[Compiled Plan] --> Obs
+    DAG[Task start/finish] --> Obs
+    Eval[TaskEvaluation] --> Obs
+    Replan[ReplanRecord] --> Obs
+    Obs --> Log[结构化 JSON 日志]
+    Obs --> Window[有界最近事件窗口]
+    Obs --> Alerts{异常检测}
+    Alerts --> Count[任务数量]
+    Alerts --> Raw[原始请求透传]
+    Alerts --> Duplicate[副作用重复]
+    Alerts --> Cycle[循环/死锁]
+```
+
+Goal Graph 事件只记录 schema、Goal 操作/目标、关系数量、缺失槽位和原始请求 SHA-256/长度；Compiled Plan
+只记录任务、能力、依赖、阶段和输入来源。`LITERAL / USER_INPUT / PROFILE_VALUE / TASK_OUTPUT:<taskId>` 可以
+说明绑定来自哪里，但用户原文、画像值、工具实参、确认值和重规划说明原文都不会进入观测日志。验收与重规划
+使用判定、错误码、finding codes 和原因哈希关联审计。任务从提交到超时/完成的实际墙钟耗时记录为
+`durationMillis`。
+
+`PlannerRolloutPolicy` 是唯一动态执行闸门：
+
+| 模式 | 只读计划 | 含副作用计划 | 旧主链 |
+| --- | --- | --- | --- |
+| `SHADOW` | 只编译和对比 | 只编译，不执行 | 真实执行 |
+| `READ_ONLY` | 允许动态执行 | 返回 `LEGACY_FALLBACK` | 保留 |
+| `FULL` | 允许动态执行 | 经确认闸门后执行 | 保留作回退 |
+
+`PLANNER_KILL_SWITCH=true` 优先于所有模式，立即把新动态执行决策切为 `LEGACY_FALLBACK`；若
+`PLANNER_FALLBACK_TO_LEGACY=false` 则硬阻断，防止静默降级。旧 `MusicAgentRoute` 主链尚未删除，因此回退
+不依赖重新部署旧代码。具体环境变量、告警解释和操作顺序见 `docs/PLANNER_OPERATIONS_RUNBOOK.md`。
+
+## 22. 主聊天切流与等待恢复
+
+`MusicMainAgent` 不再无条件执行 Route Handler。它先让 `PlannerCutoverCoordinator` 查找当前会话的
+`WAITING_USER` 工作流；没有等待任务时才做意图理解，并把支持迁移的请求交给任意多 Goal 分解器和
+`MigratedMusicWorkflowService.prepare(...)`。prepare 只完成分解后的合成、编译、安全校验和发布决策，
+不读取画像、不调用 provider，也不产生副作用。
+
+只有 `EXECUTE` 决策能进入 `execute(...)`。`SHADOW_ONLY` 与 `LEGACY_FALLBACK` 仍由旧链独占，动态执行一旦
+开始则禁止运行期回退，保证一次用户请求不会被新旧两条链重复执行。动态任务调用现有稳定能力所生成的 UI
+Action 按 workflow/task 暂存，只有对应 `TypedTaskResult` 通过 evaluator 后才由主线程写回当前聊天响应。
+
+等待状态按 `principalId + conversationId + WAITING_USER + updatedAt` 定位。`generic_workflow_execution` 的
+`resume_context_json` 仅保存原始回合、Goal Graph 和跟进计划，不保存画像；进程重启后恢复时重新读取画像，
+再把“确认/取消”或缺失字段回复绑定到持久化的 `waitingSlot`，因此简短回复不会重新走一次意图识别。
