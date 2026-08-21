@@ -1,0 +1,195 @@
+[
+  {
+    "id": "single-track-search",
+    "tier": "SINGLE",
+    "request": "搜索《晴天》",
+    "expectedGoals": [{"operation": "SEARCH", "target": "TRACK"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "track"]
+  },
+  {
+    "id": "single-artist-profile",
+    "tier": "SINGLE",
+    "request": "介绍歌手 Mili 的资料",
+    "expectedGoals": [{"operation": "LOOKUP", "target": "ARTIST"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "artist"]
+  },
+  {
+    "id": "single-track-recommendation",
+    "tier": "SINGLE",
+    "request": "推荐三首跑步音乐",
+    "expectedGoals": [{"operation": "RECOMMEND", "target": "TRACK"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "constraint"]
+  },
+  {
+    "id": "single-playlist-search",
+    "tier": "SINGLE",
+    "request": "搜索跑步歌单",
+    "expectedGoals": [{"operation": "SEARCH", "target": "PLAYLIST"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "playlist"]
+  },
+  {
+    "id": "single-profile-analysis",
+    "tier": "SINGLE",
+    "request": "分析我的音乐画像",
+    "expectedGoals": [{"operation": "ANALYZE", "target": "PROFILE"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "profile"]
+  },
+  {
+    "id": "single-second-track-search",
+    "tier": "SINGLE",
+    "request": "搜索《夜に駆ける》",
+    "expectedGoals": [{"operation": "SEARCH", "target": "TRACK"}],
+    "expectedRelationTypes": [],
+    "tags": ["single", "unicode"]
+  },
+  {
+    "id": "dual-sequence",
+    "tier": "DUAL",
+    "request": "介绍歌手 Mili 的资料，然后推荐三首他的歌",
+    "expectedGoals": [
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "RECOMMEND", "target": "TRACK"}
+    ],
+    "expectedRelationTypes": ["SEQUENCE"],
+    "tags": ["dual", "sequence", "reference"]
+  },
+  {
+    "id": "dual-parallel",
+    "tier": "DUAL",
+    "request": "介绍歌手 Mili 的资料，同时介绍歌手 Aimer 的资料",
+    "expectedGoals": [
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "LOOKUP", "target": "ARTIST"}
+    ],
+    "expectedRelationTypes": ["PARALLEL"],
+    "tags": ["dual", "parallel"]
+  },
+  {
+    "id": "dual-conditional",
+    "tier": "DUAL",
+    "request": "搜索《晴天》，如果有结果就把这些歌加入队列",
+    "expectedGoals": [
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"}
+    ],
+    "expectedRelationTypes": ["CONDITIONAL"],
+    "tags": ["dual", "conditional", "side-effect"]
+  },
+  {
+    "id": "dual-search-queue",
+    "tier": "DUAL",
+    "request": "搜索《晴天》，然后把这些歌加入队列",
+    "expectedGoals": [
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"}
+    ],
+    "expectedRelationTypes": ["SEQUENCE"],
+    "tags": ["dual", "sequence", "side-effect"]
+  },
+  {
+    "id": "dual-separate-playlists",
+    "tier": "DUAL",
+    "request": "分别推荐跑步歌单和睡前歌单",
+    "expectedGoals": [
+      {"operation": "RECOMMEND", "target": "PLAYLIST"},
+      {"operation": "RECOMMEND", "target": "PLAYLIST"}
+    ],
+    "expectedRelationTypes": ["PARALLEL"],
+    "tags": ["dual", "parallel", "separate"]
+  },
+  {
+    "id": "dual-favorite-profile",
+    "tier": "DUAL",
+    "request": "把我最喜欢的歌手的个人资料找出来",
+    "expectedGoals": [
+      {"operation": "RESOLVE", "target": "ARTIST"},
+      {"operation": "LOOKUP", "target": "ARTIST"}
+    ],
+    "expectedRelationTypes": ["DEPENDS_ON"],
+    "tags": ["dual", "profile", "dependency"]
+  },
+  {
+    "id": "multi-three-mixed",
+    "tier": "MULTI",
+    "request": "搜索《晴天》，然后把这些歌加入队列，同时介绍歌手 Mili 的资料",
+    "expectedGoals": [
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"},
+      {"operation": "LOOKUP", "target": "ARTIST"}
+    ],
+    "expectedRelationTypes": ["SEQUENCE", "PARALLEL"],
+    "tags": ["multi", "three", "mixed"]
+  },
+  {
+    "id": "multi-three-profile",
+    "tier": "MULTI",
+    "request": "把我最喜欢的歌手的个人资料找出来，然后推荐三首他的歌",
+    "expectedGoals": [
+      {"operation": "RESOLVE", "target": "ARTIST"},
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "RECOMMEND", "target": "TRACK"}
+    ],
+    "expectedRelationTypes": ["DEPENDS_ON", "SEQUENCE", "DEPENDS_ON"],
+    "tags": ["multi", "three", "profile"]
+  },
+  {
+    "id": "multi-four",
+    "tier": "MULTI",
+    "request": "介绍歌手 Mili 的资料，然后推荐三首他的歌，同时搜索跑步歌单，再分析我的音乐画像",
+    "expectedGoals": [
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "RECOMMEND", "target": "TRACK"},
+      {"operation": "SEARCH", "target": "PLAYLIST"},
+      {"operation": "ANALYZE", "target": "PROFILE"}
+    ],
+    "expectedRelationTypes": ["SEQUENCE", "PARALLEL", "SEQUENCE"],
+    "tags": ["multi", "four", "mixed"]
+  },
+  {
+    "id": "multi-four-conditional",
+    "tier": "MULTI",
+    "request": "搜索《晴天》，如果有结果就把这些歌加入队列，然后介绍歌手 Mili 的资料，同时搜索跑步歌单",
+    "expectedGoals": [
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"},
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "SEARCH", "target": "PLAYLIST"}
+    ],
+    "expectedRelationTypes": ["CONDITIONAL", "SEQUENCE", "PARALLEL"],
+    "tags": ["multi", "four", "conditional"]
+  },
+  {
+    "id": "multi-five",
+    "tier": "MULTI",
+    "request": "搜索《晴天》，如果有结果就把这些歌加入队列，然后介绍歌手 Mili 的资料，同时搜索跑步歌单，再分析我的音乐画像",
+    "expectedGoals": [
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"},
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "SEARCH", "target": "PLAYLIST"},
+      {"operation": "ANALYZE", "target": "PROFILE"}
+    ],
+    "expectedRelationTypes": ["CONDITIONAL", "SEQUENCE", "PARALLEL", "SEQUENCE"],
+    "tags": ["multi", "five", "conditional"]
+  },
+  {
+    "id": "multi-six",
+    "tier": "MULTI",
+    "request": "介绍歌手 Mili 的资料，然后推荐三首他的歌，再搜索《晴天》，再把这些歌加入队列，同时搜索跑步歌单，再分析我的音乐画像",
+    "expectedGoals": [
+      {"operation": "LOOKUP", "target": "ARTIST"},
+      {"operation": "RECOMMEND", "target": "TRACK"},
+      {"operation": "SEARCH", "target": "TRACK"},
+      {"operation": "QUEUE_ADD", "target": "QUEUE"},
+      {"operation": "SEARCH", "target": "PLAYLIST"},
+      {"operation": "ANALYZE", "target": "PROFILE"}
+    ],
+    "expectedRelationTypes": ["SEQUENCE", "SEQUENCE", "SEQUENCE", "PARALLEL", "SEQUENCE", "DEPENDS_ON"],
+    "tags": ["multi", "six", "depth-boundary"]
+  }
+]

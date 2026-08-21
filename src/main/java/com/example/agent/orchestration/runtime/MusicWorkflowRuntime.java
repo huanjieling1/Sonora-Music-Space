@@ -13,6 +13,7 @@ import com.example.agent.agent.feedback.MusicRecommendationFollowUpAgent;
 import com.example.agent.agent.profile.MusicProfileAgent;
 import com.example.agent.agent.profile.MusicRecommendationProfileAgent;
 import com.example.agent.agent.profile.MusicProfileWorkflowChildAgent;
+import com.example.agent.agent.profile.FavoriteArtistResolver;
 import com.example.agent.agent.response.MusicResponseAgent;
 import com.example.agent.agent.response.MusicResponseWorkflowChildAgent;
 import com.example.agent.agent.contract.MusicResponseTaskMode;
@@ -38,6 +39,7 @@ public final class MusicWorkflowRuntime {
     private final MusicRecommendationFollowUpAgent followUpAgent;
     private final MusicWorkflowSupervisor supervisor;
     private final MusicWorkflowTaskScheduler taskScheduler;
+    private final FavoriteArtistResolver favoriteArtistResolver;
 
     /** Compatibility constructor used by focused tests. */
     public MusicWorkflowRuntime(AgentCapabilityAgent capabilityAgent,
@@ -50,7 +52,7 @@ public final class MusicWorkflowRuntime {
                                 MusicSupportResponseAgent supportResponseAgent,
                                 MusicConversationAgentService conversationAgent,
                                 MusicWorkflowSupervisor supervisor) {
-        this(capabilityAgent, scopeResponseAgent, followUpAgent, supervisor,
+        this(capabilityAgent, scopeResponseAgent, followUpAgent, supervisor, new FavoriteArtistResolver(),
                 new MusicWorkflowTaskScheduler(new MusicWorkflowChildAgentRegistry(
                         List.of(new MusicExecutionWorkflowChildAgent(executionAgent),
                                 new MusicProfileWorkflowChildAgent(profileAgent, recommendationProfileAgent),
@@ -63,11 +65,13 @@ public final class MusicWorkflowRuntime {
                                 AgentScopeResponseAgent scopeResponseAgent,
                                 MusicRecommendationFollowUpAgent followUpAgent,
                                 MusicWorkflowSupervisor supervisor,
+                                FavoriteArtistResolver favoriteArtistResolver,
                                 MusicWorkflowTaskScheduler taskScheduler) {
         this.capabilityAgent = capabilityAgent;
         this.scopeResponseAgent = scopeResponseAgent;
         this.followUpAgent = followUpAgent;
         this.supervisor = supervisor;
+        this.favoriteArtistResolver = favoriteArtistResolver;
         this.taskScheduler = taskScheduler;
     }
 
@@ -135,6 +139,34 @@ public final class MusicWorkflowRuntime {
         state = state.completed(scheduleResponse(context, context.turn(), MusicResponseTaskMode.EXISTING_TEXT,
                 Map.of(MusicResponseWorkflowChildAgent.TEXT, state.answer())), "response");
         return MusicWorkflowOutcome.success(state);
+    }
+
+    public MusicWorkflowOutcome personalizedArtistProfile(MusicWorkflowExecutionContext context) {
+        MusicAgentWorkflowState state = context.state().withTasteContext(
+                prepareRecommendationProfile(context, context.turn()));
+        context.run().start("resolution");
+        var resolution = favoriteArtistResolver.resolve(state.tasteContext());
+        if (!resolution.resolved()) {
+            context.run().waitForUser("resolution", resolution.clarification());
+            context.run().skip("execution", "需要先确定歌手实体");
+            context.run().skip("verification", "没有可验收的歌手资料");
+            context.run().skip("response", "澄清问题已由解析阶段生成");
+            return new MusicWorkflowOutcome(state.completed(resolution.clarification(),
+                    "preference-resolution"), false);
+        }
+        context.run().complete("resolution");
+
+        MusicAgentTurn artistTurn = new MusicAgentTurn(context.turn().userId(),
+                context.turn().conversationId(), resolution.artistName(), false);
+        ExecutionOutcome verified = executeVerified(artistTurn, MusicAgentRoute.ARTIST_LOOKUP,
+                state.participated("preference-resolution"), context.run(), null);
+        String prefix = "根据你的可审计收听画像，我推断最偏好的歌手是 " + resolution.artistName()
+                + "（置信度 " + Math.round(resolution.confidence() * 100) + "%；" + resolution.basis() + "）。";
+        var completed = verified.state().completed(scheduleResponse(context, artistTurn,
+                MusicResponseTaskMode.VERIFIED_EXECUTION,
+                Map.of(MusicResponseWorkflowChildAgent.EXECUTION_RESULT, verified.result(),
+                        MusicResponseWorkflowChildAgent.PREFIX, prefix)), "response");
+        return new MusicWorkflowOutcome(completed, verified.evaluation().passed());
     }
 
     public MusicWorkflowOutcome followUp(MusicWorkflowExecutionContext context) {

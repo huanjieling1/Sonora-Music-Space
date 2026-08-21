@@ -4,7 +4,15 @@ import com.example.agent.agent.contract.MusicTaskEvaluation;
 import com.example.agent.agent.contract.MusicTaskInvocation;
 import com.example.agent.agent.contract.MusicTaskResult;
 import com.example.agent.agent.main.MusicWorkflowChildAgent;
+import com.example.agent.agent.response.GenericWorkflowResponse;
+import com.example.agent.agent.response.GenericWorkflowResponseAgent;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.example.agent.orchestration.dag.DagExecutionCommand;
+import com.example.agent.orchestration.dag.DagExecutionOptions;
+import com.example.agent.orchestration.dag.DagExecutionSnapshot;
+import com.example.agent.orchestration.dag.GenericDagExecutor;
+import com.example.agent.orchestration.dag.GenericDagTaskExecutor;
 
 import java.util.List;
 import java.util.function.BiFunction;
@@ -17,9 +25,63 @@ import java.util.function.Function;
 @Component
 public final class MusicWorkflowTaskScheduler {
     private final MusicWorkflowChildAgentRegistry registry;
+    private final GenericDagExecutor genericDagExecutor;
+    private final GenericWorkflowResponseAgent genericResponseAgent;
 
     public MusicWorkflowTaskScheduler(MusicWorkflowChildAgentRegistry registry) {
+        this(registry, null, null);
+    }
+
+    public MusicWorkflowTaskScheduler(MusicWorkflowChildAgentRegistry registry,
+                                      GenericDagExecutor genericDagExecutor) {
+        this(registry, genericDagExecutor, null);
+    }
+
+    @Autowired
+    public MusicWorkflowTaskScheduler(MusicWorkflowChildAgentRegistry registry,
+                                      GenericDagExecutor genericDagExecutor,
+                                      GenericWorkflowResponseAgent genericResponseAgent) {
         this.registry = registry;
+        this.genericDagExecutor = genericDagExecutor;
+        this.genericResponseAgent = genericResponseAgent;
+    }
+
+    /** Executes any validated CompiledPlan through the shared DAG runtime. */
+    public DagExecutionSnapshot executeCompiled(DagExecutionCommand command,
+                                                GenericDagTaskExecutor executor) {
+        return requireGeneric().execute(command, executor);
+    }
+
+    public DagExecutionSnapshot resumeCompiled(java.util.UUID workflowId, String principalId,
+                                               java.util.Map<String, Object> userReplies,
+                                               Object profileRoot,
+                                               java.util.Set<String> allowedSensitiveProfilePaths,
+                                               DagExecutionOptions options,
+                                               GenericDagTaskExecutor executor) {
+        return requireGeneric().resume(workflowId, principalId, userReplies, profileRoot,
+                allowedSensitiveProfilePaths, options, executor);
+    }
+
+    public boolean cancelCompiled(java.util.UUID workflowId, String principalId) {
+        return requireGeneric().cancel(workflowId, principalId);
+    }
+
+    public java.util.Optional<DagExecutionSnapshot> compiledSnapshot(java.util.UUID workflowId,
+                                                                     String principalId) {
+        return requireGeneric().snapshot(workflowId, principalId);
+    }
+
+    /** Produces one guarded response for a compiled arbitrary-goal workflow. */
+    public GenericWorkflowResponse respondCompiled(
+            com.example.agent.agent.contract.planning.UserGoalGraph graph,
+            DagExecutionSnapshot snapshot) {
+        if (genericResponseAgent == null) throw new IllegalStateException("通用 Response Agent 未配置");
+        return genericResponseAgent.respond(graph, snapshot);
+    }
+
+    private GenericDagExecutor requireGeneric() {
+        if (genericDagExecutor == null) throw new IllegalStateException("通用 DAG 执行器未配置");
+        return genericDagExecutor;
     }
 
     public MusicScheduledTaskExecution executeVerified(

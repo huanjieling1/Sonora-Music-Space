@@ -1,0 +1,38 @@
+[
+  {
+    "request": "介绍歌手 Mili 的资料",
+    "operations": ["LOOKUP"],
+    "targets": ["ARTIST"],
+    "relationTypes": []
+  },
+  {
+    "request": "找出我最喜欢的歌手资料，再推荐三首他的歌并加入队列",
+    "operations": ["RESOLVE", "LOOKUP", "RECOMMEND", "QUEUE_ADD"],
+    "targets": ["ARTIST", "ARTIST", "TRACK", "QUEUE"],
+    "relationTypes": ["DEPENDS_ON", "SEQUENCE", "SEQUENCE", "DEPENDS_ON"]
+  },
+  {
+    "request": "搜索 Mili 的歌，如果找到就播放第一首",
+    "operations": ["SEARCH", "PLAY"],
+    "targets": ["TRACK", "SEARCH_RESULT"],
+    "relationTypes": ["CONDITIONAL"]
+  },
+  {
+    "request": "搜索周杰伦的《晴天》，然后播放第一首",
+    "operations": ["SEARCH", "PLAY"],
+    "targets": ["TRACK", "SEARCH_RESULT"],
+    "relationTypes": ["SEQUENCE"]
+  },
+  {
+    "request": "搜索周杰伦的资料，同时搜索林俊杰的资料",
+    "operations": ["LOOKUP", "LOOKUP"],
+    "targets": ["ARTIST", "ARTIST"],
+    "relationTypes": ["PARALLEL"]
+  },
+  {
+    "request": "分别推荐跑步歌单和睡前歌单",
+    "operations": ["RECOMMEND", "RECOMMEND"],
+    "targets": ["PLAYLIST", "PLAYLIST"],
+    "relationTypes": ["PARALLEL"]
+  }
+]

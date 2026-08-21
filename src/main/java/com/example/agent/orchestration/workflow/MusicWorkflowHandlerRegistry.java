@@ -47,7 +47,8 @@ public final class MusicWorkflowHandlerRegistry {
 
     public static MusicWorkflowHandlerRegistry builtIns() {
         return new MusicWorkflowHandlerRegistry(List.of(new BoundaryWorkflowHandler(),
-                new ProfileWorkflowHandler(), new DiscoveryWorkflowHandler(), new SupportWorkflowHandler(),
+                new ProfileWorkflowHandler(),
+                new DiscoveryWorkflowHandler(), new SupportWorkflowHandler(),
                 new CatalogWorkflowHandler(), new PlaybackWorkflowHandler(), new ConversationWorkflowHandler()));
     }
 }

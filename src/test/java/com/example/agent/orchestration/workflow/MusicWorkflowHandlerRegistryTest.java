@@ -2,10 +2,12 @@ package com.example.agent.orchestration.workflow;
 
 import com.example.agent.agent.contract.MusicAgentRoute;
 import com.example.agent.agent.contract.MusicWorkflowPlan;
+import com.example.agent.agent.contract.MusicAgentTurn;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,6 +21,20 @@ class MusicWorkflowHandlerRegistryTest {
             assertThat(registry.require(route).routes()).contains(route);
             assertThat(registry.policy(route)).isNotNull();
         }
+    }
+
+    @Test
+    void personalizedArtistProfileIsAProfileToEntityToCatalogDag() {
+        var route = MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE;
+        var handler = MusicWorkflowHandlerRegistry.builtIns().require(route);
+        var plan = handler.plan(new MusicWorkflowPlanningContext(
+                new MusicAgentTurn(1, UUID.randomUUID(),
+                        "把你认为的我最喜欢的歌手的个人资料找出来"), route, true));
+
+        assertThat(plan.tasks()).extracting(task -> task.id())
+                .containsExactly("intent", "profile", "resolution", "execution", "verification", "response");
+        assertThat(plan.tasks().stream().filter(task -> task.id().equals("execution")).findFirst().orElseThrow()
+                .dependencies()).containsExactly("resolution");
     }
 
     @Test

@@ -60,6 +60,14 @@ public class MusicIntentAgent {
                     + "猜你喜欢|懂我|符合我(?:的)?口味|我的口味|我的品味|来点|来些|来一些|随便来|发现音乐|相似音乐|"
                     + "recommend|for me|my taste|surprise me|similar",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern FAVORITE_ARTIST_INFERENCE = Pattern.compile(
+            "我最喜欢的(?:歌手|艺人|乐队|组合)|我最爱的(?:歌手|艺人|乐队|组合)|"
+                    + "我最常听的(?:歌手|艺人|乐队|组合)|你认为我.*(?:喜欢|偏爱|常听).*(?:歌手|艺人|乐队|组合)|"
+                    + "根据.*(?:画像|记录|了解).*(?:喜欢|偏爱|常听).*(?:歌手|艺人|乐队|组合)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern ARTIST_PROFILE_RESULT = Pattern.compile(
+            "资料|档案|介绍|信息|详情|生涯|成就|曲风|风格|找出来|查出来|profile|about",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern TRENDING = Pattern.compile(
             "热度|热门|最火|火的|排行榜|排行|榜单|飙升|上升最快|流行指数|热歌|"
                     + "trending|chart|hottest|most popular", Pattern.CASE_INSENSITIVE);
@@ -126,6 +134,9 @@ public class MusicIntentAgent {
         }
         if (intent.action() == MusicIntentDraft.Action.CAPABILITY_INQUIRY) {
             return MusicIntentUnderstanding.routed(MusicAgentRoute.CAPABILITY_INQUIRY, intent);
+        }
+        if (shouldResolveFavoriteArtistProfile(request)) {
+            return MusicIntentUnderstanding.routed(MusicAgentRoute.PERSONALIZED_ARTIST_PROFILE, intent);
         }
         if (intent.mode() == MusicIntentDraft.Mode.TRENDING
                 || intent.rankingMetric() != MusicIntentDraft.RankingMetric.NONE) {
@@ -379,7 +390,14 @@ public class MusicIntentAgent {
     }
 
     public static boolean shouldUseRecommendationProfile(String message) {
-        return StringUtils.hasText(message) && PERSONALIZED_DISCOVERY.matcher(message).find();
+        return StringUtils.hasText(message) && (PERSONALIZED_DISCOVERY.matcher(message).find()
+                || FAVORITE_ARTIST_INFERENCE.matcher(message).find());
+    }
+
+    public static boolean shouldResolveFavoriteArtistProfile(String message) {
+        return StringUtils.hasText(message)
+                && FAVORITE_ARTIST_INFERENCE.matcher(message).find()
+                && ARTIST_PROFILE_RESULT.matcher(message).find();
     }
 
     public static String failureAnswer(String toolResult) {
